@@ -4,12 +4,15 @@ import gc
 import json
 from collections import defaultdict
 from typing import Any, Callable
+from matplotlib import ticker
 import matplotlib.pyplot as plt
 import shutil
 import time
 import platform
 import re
 import pathlib
+import psutil
+import math
 
 import orjson
 import pyyjson
@@ -36,6 +39,8 @@ LIBRARIES = {
         "pyyjson.loads": pyyjson.loads,
     },
 }
+
+INDEXES = ["elapsed", "user_cpu"]
 
 
 def benchmark(repeat_time: int, func, *args):
@@ -113,11 +118,38 @@ def _run_benchmark(
             return benchmark_unicode_arg
         return benchmark
 
+    process = psutil.Process()
+
     for name, func in funcs.items():
         benchmark_func = pick_benchmark_func()
         gc.collect()
+        t0 = time.perf_counter()
+        cpu_times_before = process.cpu_times()
+        ctx_before = process.num_ctx_switches()
+        mem_before = process.memory_info().rss
+
         elapsed = benchmark_func(repeat_times, func, input_data)
-        cur_obj[name] = elapsed
+
+        # End measuring
+        t1 = time.perf_counter()
+        cpu_times_after = process.cpu_times()
+        ctx_after = process.num_ctx_switches()
+
+        user_cpu = cpu_times_after.user - cpu_times_before.user
+        system_cpu = cpu_times_after.system - cpu_times_before.system
+        voluntary_ctx = ctx_after.voluntary - ctx_before.voluntary
+        involuntary_ctx = ctx_after.involuntary - ctx_before.involuntary
+        mem_after = process.memory_info().rss
+
+        cur_obj[name] = {
+            "elapsed": elapsed,
+            "user_cpu": user_cpu,
+            "system_cpu": system_cpu,
+            "ctx_vol": voluntary_ctx,
+            "ctx_invol": involuntary_ctx,
+            "mem_diff": mem_after - mem_before,
+            "wall_time": t1 - t0,
+        }
 
     pyyjson_name = next(k for k in funcs if k.startswith("pyyjson"))
     pyyjson_func = funcs[pyyjson_name]
@@ -135,14 +167,17 @@ def _run_benchmark(
             else pyyjson.inspect_pyunicode(input_data)[1]
         )
 
-    # ratio: pyyjson / orjson
     orjson_name = next(k for k in funcs if k.startswith("orjson"))
     orjson_time = cur_obj[orjson_name]
     pyyjson_time = cur_obj[pyyjson_name]
 
-    cur_obj["ratio"] = pyyjson_time / orjson_time
+    for index in INDEXES:
+        if orjson_time[index] == 0:
+            cur_obj[f"{index}_ratio"] = math.inf
+        else:
+            cur_obj[f"{index}_ratio"] = pyyjson_time[index] / orjson_time[index]
     cur_obj["pyyjson_bytes_per_sec"] = pyyjson.dumps(
-        size * repeat_times / (pyyjson_time / _NS_IN_ONE_S)
+        size * repeat_times / (pyyjson_time["elapsed"] / _NS_IN_ONE_S)
     )
 
 
@@ -215,16 +250,89 @@ def get_mem_total() -> str:
 
 
 def get_ratio_color(ratio: float) -> str:
-    if ratio >= 1.0:
+    if ratio <= 0.6:
         return "#d63031"  # deep coral red
-    elif ratio >= 0.9:
+    elif ratio <= 0.8:
         return "#e67e22"  # warm orange
-    elif ratio >= 0.8:
+    elif ratio == 1:
+        return "black"
+    elif ratio <= 1.2:
         return "#f1c40f"  # strong yellow
-    elif ratio >= 0.75:
+    elif ratio <= 1.5:
         return "#27ae60"  # green
     else:
         return "#2980b9"  # blue (rare)
+
+
+def plot_relative_ops(data: dict, doc_name: str, index_s: str, output_path: str):
+    categories = ["dumps", "dumps_to_bytes", "loads(str)", "loads(bytes)"]
+    libraries = ["orjson", "pyyjson"]
+    colors = {"orjson": "#6baed6", "pyyjson": "#fd8d3c"}
+
+    total_groups = len(categories)
+    bar_width = 0.35
+    x = list(range(total_groups))
+
+    # Prepare grouped values
+    orjson_vals = [1.0 for _ in categories]
+    pyyjson_vals = [1 / data[cat][f"{index_s}_ratio"] for cat in categories]
+    values = [orjson_vals, pyyjson_vals]
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    bars = []
+    for i in range(len(libraries)):
+        bars.append(
+            ax.bar(
+                [j + i * bar_width for j in x],
+                values[i],
+                width=bar_width,
+                label=libraries[i],
+                color=colors[libraries[i]],
+            )
+        )
+
+    # Annotate bars
+    for bars, vals in zip(bars, values):
+        for bar, val in zip(bars, vals):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                val + 0.05,
+                f"{val:.2f}x",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color=get_ratio_color(val),
+            )
+
+    # Formatting
+    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, fontsize=9)
+    ax.set_ylim(0, max(pyyjson_vals + [1.0]) * 1.25)
+    ax.set_ylabel("ratio", fontsize=9)
+    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.1fx"))
+    fig.text(
+        0.5,
+        0.01,
+        "Higher is better",
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        style="italic",
+        color="#555555",
+    )
+
+    for spine in ["top", "right"]:
+        ax.spines[spine].set_visible(False)
+
+    ax.legend(loc="upper right", frameon=False, fontsize=8)
+    ax.set_title(doc_name, fontsize=11)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+    return f"Plot saved to: {output_path}"
 
 
 def generate_report(result: dict[str, dict[str, Any]], output: str, file: str):
@@ -235,85 +343,20 @@ def generate_report(result: dict[str, dict[str, Any]], output: str, file: str):
         shutil.rmtree(report_folder)
     os.mkdir(report_folder)
 
-    categories = list(LIBRARIES.keys())
-    files_report = ""
+    files_reports = ""
 
-    for bench_file in get_benchmark_files():
-        # Create a 1x4 horizontal layout
-        fig, axs = plt.subplots(1, len(categories), figsize=(4 * len(categories), 4))
-        fig.suptitle(f"Benchmark: {bench_file.name}", fontsize=14)
-
-        for idx, category in enumerate(categories):
-            print(f"Processing {bench_file.name} - {category}")
-            curfile_obj = result[bench_file.name][category]
-            keys = list(LIBRARIES[category].keys())
-
-            orjson_time = curfile_obj[keys[0]]
-            pyyjson_time = curfile_obj[keys[1]]
-            ratio = curfile_obj["ratio"]
-
-            ax = axs[idx]
-            bars = ax.bar(
-                ["orjson", "pyyjson"],
-                [orjson_time, pyyjson_time],
-                color=["#fd8d3c", "#6baed6"],
+    for index_s in INDEXES:
+        files_reports += f"### {index_s}  \n"
+        for bench_file in get_benchmark_files():
+            print(f"Processing {bench_file.name}")
+            plot_relative_ops(
+                result[bench_file.name],
+                bench_file.name,
+                index_s,
+                os.path.join(report_folder, f"{bench_file.name}_{index_s}.svg"),
             )
+            files_reports += f"![{bench_file.name}_{index_s}.svg](./{bench_file.name}_{index_s}.svg)  \n"
 
-            # Add bar labels
-            for bar in bars:
-                height = bar.get_height()
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    height * 1.01,
-                    f"{height:.2e}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8,
-                )
-
-            # Padding above bars
-            ymax = max(orjson_time, pyyjson_time)
-            ax.set_ylim(0, ymax * 1.15)
-            ax.plot([0], [1], "^k", transform=ax.transAxes, clip_on=False)
-
-            # Clean visual style: remove axis spines and ticks
-            for spine in ["top", "right"]:
-                ax.spines[spine].set_visible(False)
-            ax.tick_params(left=False, bottom=False)
-
-            ax.set_title(category, fontsize=10)
-            ax.set_xticks([0, 1])
-            ax.set_xticklabels(["orjson", "pyyjson"])
-            if idx == 0:
-                ax.set_ylabel("Speed (ns)")
-
-            ax.annotate(
-                f"ratio={ratio:.2f}",
-                xy=(1.0, 1.02),
-                xycoords="axes fraction",
-                ha="right",
-                va="bottom",
-                fontsize=9,
-                style="italic",
-                color=get_ratio_color(ratio),
-            )
-
-        # plt.tight_layout(rect=[0, 0.05, 1, 0.9], pad=2.0)
-        fig.subplots_adjust(top=0.88, bottom=0.12)
-
-        fig.text(
-            0.5,
-            0.01,
-            "Lower is better ↓",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            style="italic",
-            color="#555555",
-        )
-        plt.savefig(os.path.join(report_folder, f"{bench_file.name}.svg"))
-        plt.close()
-        files_report += f"![{bench_file.name}.svg](./{bench_file.name}.svg)  \n"
     with open(os.path.join(CUR_DIR, "template.md"), "r") as f:
         template = f.read()
     template = template.format(
@@ -323,7 +366,7 @@ def generate_report(result: dict[str, dict[str, Any]], output: str, file: str):
         PYTHON=sys.version,
         SIMD_FLAGS=pyyjson.get_current_features(),
         CHIPSET=get_cpu_name(),
-        FILES=files_report,
+        FILES=files_reports,
         MEM=get_mem_total(),
     )
     with open(os.path.join(report_folder, "README.md"), "w") as f:

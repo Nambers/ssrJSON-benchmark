@@ -1,7 +1,7 @@
-# PYYJson benchmark Report
+# ssrJSON benchmark Report
 
 REV:            `{REV}`  
-python:         {PYTHON}  
+Python:         `{PYTHON}`  
 Generated time: {TIME}  
 OS:             {OS}  
 SIMD flag:      {SIMD_FLAGS}  
