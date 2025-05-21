@@ -114,8 +114,8 @@ def _run_benchmark(
         return benchmark
 
     for name, func in funcs.items():
-        gc.collect()
         benchmark_func = pick_benchmark_func()
+        gc.collect()
         elapsed = benchmark_func(repeat_times, func, input_data)
         cur_obj[name] = elapsed
 
@@ -364,7 +364,7 @@ def main():
         "--process-bytes",
         help="Total process bytes per test, default 1e8",
         required=False,
-        default=100000000,
+        default=100050000,
         type=int,
     )
     parser.add_argument(
