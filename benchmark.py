@@ -15,7 +15,7 @@ import psutil
 import math
 
 import orjson
-import pyyjson
+import ssrjson
 
 CUR_FILE = os.path.abspath(__file__)
 CUR_DIR = os.path.dirname(CUR_FILE)
@@ -24,19 +24,19 @@ _NS_IN_ONE_S = 1000000000
 LIBRARIES = {
     "dumps": {
         "orjson.dumps+decode": lambda x: orjson.dumps(x).decode("utf-8"),
-        "pyyjson.dumps": pyyjson.dumps,
+        "ssrjson.dumps": ssrjson.dumps,
     },
     "dumps_to_bytes": {
         "orjson.dumps": orjson.dumps,
-        "pyyjson.dumps_to_bytes": pyyjson.dumps_to_bytes,
+        "ssrjson.dumps_to_bytes": ssrjson.dumps_to_bytes,
     },
     "loads(str)": {
         "orjson.loads": orjson.loads,
-        "pyyjson.loads": pyyjson.loads,
+        "ssrjson.loads": ssrjson.loads,
     },
     "loads(bytes)": {
         "orjson.loads": orjson.loads,
-        "pyyjson.loads": pyyjson.loads,
+        "ssrjson.loads": ssrjson.loads,
     },
 }
 
@@ -49,8 +49,8 @@ def benchmark(repeat_time: int, func, *args):
     returns time used (ns).
     """
     # warm up
-    pyyjson.run_object_accumulate_benchmark(func, 100, args)
-    return pyyjson.run_object_accumulate_benchmark(func, repeat_time, args)
+    ssrjson.run_object_accumulate_benchmark(func, 100, args)
+    return ssrjson.run_object_accumulate_benchmark(func, repeat_time, args)
 
 
 def benchmark_unicode_arg(repeat_time: int, func, unicode: str, *args):
@@ -59,8 +59,8 @@ def benchmark_unicode_arg(repeat_time: int, func, unicode: str, *args):
     returns time used (ns).
     """
     # warm up
-    pyyjson.run_unicode_accumulate_benchmark(func, 100, unicode, args)
-    return pyyjson.run_unicode_accumulate_benchmark(func, repeat_time, unicode, args)
+    ssrjson.run_unicode_accumulate_benchmark(func, 100, unicode, args)
+    return ssrjson.run_unicode_accumulate_benchmark(func, repeat_time, unicode, args)
 
 
 def benchmark_use_dump_cache(repeat_time: int, func, raw_bytes: bytes, *args):
@@ -71,11 +71,11 @@ def benchmark_use_dump_cache(repeat_time: int, func, raw_bytes: bytes, *args):
     new_args = (json.loads(raw_bytes), *args)
     # warm up
     for _ in range(100):
-        pyyjson.run_object_benchmark(func, new_args)
+        ssrjson.run_object_benchmark(func, new_args)
     #
     total = 0
     for _ in range(repeat_time):
-        total += pyyjson.run_object_benchmark(func, new_args)
+        total += ssrjson.run_object_benchmark(func, new_args)
     return total
 
 
@@ -88,12 +88,12 @@ def benchmark_invalidate_dump_cache(repeat_time: int, func, raw_bytes: bytes, *a
     # warm up
     for _ in range(10):
         new_args = (json.loads(raw_bytes), *args)
-        pyyjson.run_object_benchmark(func, new_args)
+        ssrjson.run_object_benchmark(func, new_args)
     #
     total = 0
     for _ in range(repeat_time):
         new_args = (json.loads(raw_bytes), *args)
-        total += pyyjson.run_object_benchmark(func, new_args)
+        total += ssrjson.run_object_benchmark(func, new_args)
     return total
 
 
@@ -151,33 +151,33 @@ def _run_benchmark(
             "wall_time": t1 - t0,
         }
 
-    pyyjson_name = next(k for k in funcs if k.startswith("pyyjson"))
-    pyyjson_func = funcs[pyyjson_name]
+    ssrjson_name = next(k for k in funcs if k.startswith("ssrjson"))
+    ssrjson_func = funcs[ssrjson_name]
     if "dumps" in mode:
         data_obj = json.loads(input_data)
-        output = pyyjson_func(data_obj)
+        output = ssrjson_func(data_obj)
         if "bytes" in mode:
             size = len(output)
         else:
-            _, size, _, _ = pyyjson.inspect_pyunicode(output)
+            _, size, _, _ = ssrjson.inspect_pyunicode(output)
     else:
         size = (
             len(input_data)
             if isinstance(input_data, bytes)
-            else pyyjson.inspect_pyunicode(input_data)[1]
+            else ssrjson.inspect_pyunicode(input_data)[1]
         )
 
     orjson_name = next(k for k in funcs if k.startswith("orjson"))
     orjson_time = cur_obj[orjson_name]
-    pyyjson_time = cur_obj[pyyjson_name]
+    ssrjson_time = cur_obj[ssrjson_name]
 
     for index in INDEXES:
         if orjson_time[index] == 0:
             cur_obj[f"{index}_ratio"] = math.inf
         else:
-            cur_obj[f"{index}_ratio"] = pyyjson_time[index] / orjson_time[index]
-    cur_obj["pyyjson_bytes_per_sec"] = pyyjson.dumps(
-        size * repeat_times / (pyyjson_time["elapsed"] / _NS_IN_ONE_S)
+            cur_obj[f"{index}_ratio"] = ssrjson_time[index] / orjson_time[index]
+    cur_obj["ssrjson_bytes_per_sec"] = ssrjson.dumps(
+        size * repeat_times / (ssrjson_time["elapsed"] / _NS_IN_ONE_S)
     )
 
 
@@ -190,7 +190,7 @@ def run_file_benchmark(
     base_file_name = os.path.basename(file)
     curfile_obj = result[base_file_name]
     curfile_obj["byte_size"] = bytes_size = len(raw_bytes)
-    kind, str_size, is_ascii, _ = pyyjson.inspect_pyunicode(raw)
+    kind, str_size, is_ascii, _ = ssrjson.inspect_pyunicode(raw)
     curfile_obj["pyunicode_size"] = str_size
     curfile_obj["pyunicode_kind"] = kind
     curfile_obj["pyunicode_is_ascii"] = is_ascii
@@ -201,7 +201,7 @@ def run_file_benchmark(
 
 
 def get_head_rev_name():
-    return pyyjson.__version__
+    return ssrjson.__version__
 
 
 def get_real_output_file_name(output: str):
@@ -266,8 +266,8 @@ def get_ratio_color(ratio: float) -> str:
 
 def plot_relative_ops(data: dict, doc_name: str, index_s: str, output_path: str):
     categories = ["dumps", "dumps_to_bytes", "loads(str)", "loads(bytes)"]
-    libraries = ["orjson", "pyyjson"]
-    colors = {"orjson": "#6baed6", "pyyjson": "#fd8d3c"}
+    libraries = ["orjson", "ssrjson"]
+    colors = {"orjson": "#6baed6", "ssrjson": "#fd8d3c"}
 
     total_groups = len(categories)
     bar_width = 0.35
@@ -275,8 +275,8 @@ def plot_relative_ops(data: dict, doc_name: str, index_s: str, output_path: str)
 
     # Prepare grouped values
     orjson_vals = [1.0 for _ in categories]
-    pyyjson_vals = [1 / data[cat][f"{index_s}_ratio"] for cat in categories]
-    values = [orjson_vals, pyyjson_vals]
+    ssrjson_vals = [1 / data[cat][f"{index_s}_ratio"] for cat in categories]
+    values = [orjson_vals, ssrjson_vals]
 
     fig, ax = plt.subplots(figsize=(10, 4))
     bars = []
@@ -308,7 +308,7 @@ def plot_relative_ops(data: dict, doc_name: str, index_s: str, output_path: str)
     ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
     ax.set_xticks(x)
     ax.set_xticklabels(categories, fontsize=9)
-    ax.set_ylim(0, max(pyyjson_vals + [1.0]) * 1.25)
+    ax.set_ylim(0, max(ssrjson_vals + [1.0]) * 1.25)
     ax.set_ylabel("ratio", fontsize=9)
     ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.1fx"))
     fig.text(
@@ -364,7 +364,7 @@ def generate_report(result: dict[str, dict[str, Any]], output: str, file: str):
         TIME=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
         OS=f"{platform.system()} {platform.machine()}",
         PYTHON=sys.version,
-        SIMD_FLAGS=pyyjson.get_current_features(),
+        SIMD_FLAGS=ssrjson.get_current_features(),
         CHIPSET=get_cpu_name(),
         FILES=files_reports,
         MEM=get_mem_total(),
