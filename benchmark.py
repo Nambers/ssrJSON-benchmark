@@ -1,3 +1,4 @@
+import io
 import sys
 import os
 import gc
@@ -6,13 +7,22 @@ from collections import defaultdict
 from typing import Any, Callable
 from matplotlib import ticker
 import matplotlib.pyplot as plt
-import shutil
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from svglib.svglib import svg2rlg
+from reportlab.graphics import renderPDF
+from typing import List
+import io
 import time
 import platform
 import re
 import pathlib
 import psutil
 import math
+import matplotlib as mpl
+
+mpl.rcParams["svg.fonttype"] = "none"
+mpl.rcParams["pdf.fonttype"] = 42
 
 import orjson
 import ssrjson
@@ -205,14 +215,11 @@ def get_head_rev_name():
 
 
 def get_real_output_file_name(output: str):
-    if output:
-        file = output
+    rev = get_head_rev_name()
+    if not rev:
+        file = "benchmark_result.json"
     else:
-        rev = get_head_rev_name()
-        if not rev:
-            file = "benchmark_result.json"
-        else:
-            file = f"benchmark_result_{rev}.json"
+        file = f"benchmark_result_{rev}.json"
     return file
 
 
@@ -264,7 +271,7 @@ def get_ratio_color(ratio: float) -> str:
         return "#2980b9"  # blue (rare)
 
 
-def plot_relative_ops(data: dict, doc_name: str, index_s: str, output_path: str):
+def plot_relative_ops(data: dict, doc_name: str, index_s: str):
     categories = ["dumps", "dumps_to_bytes", "loads(str)", "loads(bytes)"]
     libraries = ["orjson", "ssrjson"]
     colors = {"orjson": "#6baed6", "ssrjson": "#fd8d3c"}
@@ -329,52 +336,107 @@ def plot_relative_ops(data: dict, doc_name: str, index_s: str, output_path: str)
     ax.set_title(doc_name, fontsize=11)
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
+    rep = io.BytesIO()
+    plt.savefig(rep, format="svg")
+    plt.close(fig)
 
-    return f"Plot saved to: {output_path}"
+    return rep
 
 
-def generate_report(result: dict[str, dict[str, Any]], output: str, file: str):
+def generate_pdf_report(
+    figures: List[List[io.BytesIO]], header_text: str, output_pdf_path: str
+):
+    c = canvas.Canvas(output_pdf_path, pagesize=letter)
+    width, height = letter
+
+    c.setFont("Helvetica-Bold", 16)
+    text_obj = c.beginText()
+    text_obj.setTextOrigin(40, height - 50)
+    text_obj.setFont("Courier", 10)
+
+    for line in header_text.splitlines():
+        text_obj.textLine(line)
+
+    c.drawText(text_obj)
+    header_lines = header_text.count("\n") + 1
+    header_height = header_lines * 14
+    y_pos = height - 60 - header_height
+
+    for name, figs in zip(INDEXES, figures):
+        text_obj = c.beginText()
+        text_obj.setTextOrigin(40, y_pos)
+        text_obj.setFont("Helvetica-Bold", 14)
+        text_obj.textLine(f"{name}")
+        c.drawText(text_obj)
+        c.bookmarkHorizontal(name, 0, y_pos + 20)
+        c.addOutlineEntry(name, name, level=0)
+        y_pos -= 20
+        for svg_io in figs:
+
+            svg_io.seek(0)
+
+            drawing = svg2rlg(svg_io)
+
+            available_width = width - 80
+            scale = available_width / drawing.width
+            drawing.width *= scale
+            drawing.height *= scale
+            drawing.scale(scale, scale)
+
+            c.setStrokeColorRGB(0.9, 0.9, 0.9)
+            c.setLineWidth(0.4)
+            c.line(40, y_pos, width - 40, y_pos)
+
+            renderPDF.draw(drawing, c, 40, y_pos - drawing.height)
+            y_pos -= drawing.height + 40
+
+            if y_pos < 100:
+                c.showPage()
+                y_pos = height - 50
+
+    c.save()
+    return output_pdf_path
+
+
+def generate_report(result: dict[str, dict[str, Any]], file: str):
     file = file.removesuffix(".json")
-    report_folder = f"{file}_report"
+    report_name = f"{file}_report.pdf"
 
-    if os.path.exists(report_folder):
-        shutil.rmtree(report_folder)
-    os.mkdir(report_folder)
-
-    files_reports = ""
+    figures = []
 
     for index_s in INDEXES:
-        files_reports += f"### {index_s}  \n"
+        tmp = []
         for bench_file in get_benchmark_files():
             print(f"Processing {bench_file.name}")
-            plot_relative_ops(
-                result[bench_file.name],
-                bench_file.name,
-                index_s,
-                os.path.join(report_folder, f"{bench_file.name}_{index_s}.svg"),
+            tmp.append(
+                plot_relative_ops(
+                    result[bench_file.name],
+                    bench_file.name,
+                    index_s,
+                )
             )
-            files_reports += f"![{bench_file.name}_{index_s}.svg](./{bench_file.name}_{index_s}.svg)  \n"
+        figures.append(tmp)
 
     with open(os.path.join(CUR_DIR, "template.md"), "r") as f:
         template = f.read()
     template = template.format(
-        REV=get_head_rev_name(),
+        REV=file.removeprefix("benchmark_result_").removesuffix(".json"),
         TIME=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
         OS=f"{platform.system()} {platform.machine()}",
         PYTHON=sys.version,
         SIMD_FLAGS=ssrjson.get_current_features(),
         CHIPSET=get_cpu_name(),
-        FILES=files_reports,
         MEM=get_mem_total(),
     )
-    with open(os.path.join(report_folder, "README.md"), "w") as f:
-        f.write(template)
+    generate_pdf_report(
+        figures,
+        header_text=template,
+        output_pdf_path=os.path.join(CUR_DIR, report_name),
+    )
 
 
-def run_benchmark(process_bytes: int, output: str, is_stdout: bool = False):
-    file = get_real_output_file_name(output)
+def run_benchmark(process_bytes: int, is_stdout: bool = False):
+    file = get_real_output_file_name()
     if os.path.exists(file):
         os.remove(file)
     result: defaultdict[str, defaultdict[str, Any]] = defaultdict(
@@ -389,7 +451,7 @@ def run_benchmark(process_bytes: int, output: str, is_stdout: bool = False):
         f.write(output_result)
     if is_stdout:
         print(output_result)
-    generate_report(result, output, file)
+    generate_report(result, file)
 
 
 def main():
@@ -399,9 +461,6 @@ def main():
 
     parser.add_argument(
         "-f", "--file", help="record JSON file", required=False, default=None
-    )
-    parser.add_argument(
-        "-o", "--output", help="Output file", required=False, default=None
     )
     parser.add_argument(
         "--process-bytes",
@@ -418,9 +477,9 @@ def main():
     if args.file:
         with open(args.file, "r") as f:
             j = json.load(f)
-        generate_report(j, args.output, args.file.split("/")[-1])
+        generate_report(j, args.file.split("/")[-1])
     else:
-        run_benchmark(args.process_bytes, args.output, args.stdout)
+        run_benchmark(args.process_bytes, args.stdout)
 
 
 if __name__ == "__main__":
