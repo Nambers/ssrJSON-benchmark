@@ -22,7 +22,6 @@ import math
 import matplotlib as mpl
 
 mpl.rcParams["svg.fonttype"] = "none"
-mpl.rcParams["pdf.fonttype"] = 42
 
 import orjson
 import ssrjson
@@ -214,7 +213,7 @@ def get_head_rev_name():
     return ssrjson.__version__
 
 
-def get_real_output_file_name(output: str):
+def get_real_output_file_name():
     rev = get_head_rev_name()
     if not rev:
         file = "benchmark_result.json"
@@ -424,6 +423,7 @@ def generate_report(result: dict[str, dict[str, Any]], file: str):
         TIME=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
         OS=f"{platform.system()} {platform.machine()}",
         PYTHON=sys.version,
+        ORJSON_VER=orjson.__version__,
         SIMD_FLAGS=ssrjson.get_current_features(),
         CHIPSET=get_cpu_name(),
         MEM=get_mem_total(),
