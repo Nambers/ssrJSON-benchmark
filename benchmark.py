@@ -94,14 +94,16 @@ def benchmark_invalidate_dump_cache(repeat_time: int, func, raw_bytes: bytes, *a
     so we need to invalidate it.
     returns time used (ns).
     """
+    data_warmup = [json.loads(raw_bytes) for _ in range(10)]
+    data = [json.loads(raw_bytes) for _ in range(repeat_time)]
     # warm up
-    for _ in range(10):
-        new_args = (json.loads(raw_bytes), *args)
+    for i in range(10):
+        new_args = (data_warmup[i], *args)
         ssrjson.run_object_benchmark(func, new_args)
     #
     total = 0
-    for _ in range(repeat_time):
-        new_args = (json.loads(raw_bytes), *args)
+    for i in range(repeat_time):
+        new_args = (data[i], *args)
         total += ssrjson.run_object_benchmark(func, new_args)
     return total
 
