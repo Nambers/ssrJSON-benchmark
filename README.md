@@ -26,3 +26,5 @@ python benchmark.py
 
 * The performance of JSON encoding is primarily constrained by the speed of writing to the buffer, whereas decoding performance is mainly limited by the frequent invocation of CPython interfaces for object creation. During decoding, both ssrJSON and orjson employ short key caching to reduce the number of object creations, and this caching mechanism is global in both cases. As a result, decoding benchmark tests may not accurately reflect the conditions encountered in real-world production environments.
 
+* The files simple_object.json and simple_object_zh.json do not represent real-world data; they are solely used to compare the performance of the fast path. Therefore, the benchmark results should not be interpreted as indicative of actual performance.
+
