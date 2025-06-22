@@ -56,7 +56,12 @@ LIBRARIES: dict[str, dict[str, Callable[[str | bytes], Any]]] = {
         "ssrjson.dumps": lambda x: ssrjson.dumps(x, indent=2),
     },
     "dumps_to_bytes": {
-        "json.dumps": lambda x: json.dumps(x).encode("utf-8"),
+        "json.dumps+encode": lambda x: json.dumps(x).encode("utf-8"),
+        "orjson.dumps": orjson.dumps,
+        "ssrjson.dumps_to_bytes": ssrjson.dumps_to_bytes,
+    },
+    "dumps_to_bytes(indented2)": {
+        "json.dumps+encode": lambda x: json.dumps(x).encode("utf-8"),
         "orjson.dumps": orjson.dumps,
         "ssrjson.dumps_to_bytes": ssrjson.dumps_to_bytes,
     },
@@ -133,7 +138,7 @@ def benchmark_invalidate_dump_cache(repeat_time: int, func, raw_bytes: bytes, *a
 
 
 def get_benchmark_files() -> list[pathlib.Path]:
-    return pathlib.Path(CUR_DIR, "_files").glob("*.json")
+    return sorted(pathlib.Path(CUR_DIR, "_files").glob("*.json"))
 
 
 def _run_benchmark(
@@ -577,7 +582,7 @@ def main():
             j = json.load(f)
         file = args.file.split("/")[-1]
     else:
-        j, file = run_benchmark(args.process_bytes, True)
+        j, file = run_benchmark(args.process_bytes)
         file = file.split("/")[-1]
 
     if args.markdown:
