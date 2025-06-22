@@ -1,6 +1,6 @@
 *
 !.gitignore
-*!_files
+!_files
 !_files/*
 !benchmark.py
 !template.md
