@@ -61,9 +61,9 @@ LIBRARIES: dict[str, dict[str, Callable[[str | bytes], Any]]] = {
         "ssrjson.dumps_to_bytes": ssrjson.dumps_to_bytes,
     },
     "dumps_to_bytes(indented2)": {
-        "json.dumps+encode": lambda x: json.dumps(x).encode("utf-8"),
-        "orjson.dumps": orjson.dumps,
-        "ssrjson.dumps_to_bytes": ssrjson.dumps_to_bytes,
+        "json.dumps+encode": lambda x: json.dumps(x, indent=2).encode("utf-8"),
+        "orjson.dumps": lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2),
+        "ssrjson.dumps_to_bytes": lambda x: ssrjson.dumps_to_bytes(x, indent=2),
     },
     "loads(str)": {
         "json.loads": json.loads,
@@ -285,7 +285,7 @@ def get_mem_total() -> str:
         import psutil
 
         mem_total = psutil.virtual_memory().total // (1024 * 1024)
-    return f"{mem_total / (1024 ** 2):.3f}GiB"
+    return f"{mem_total / (1024**2):.3f}GiB"
 
 
 def get_ratio_color(ratio: float) -> str:
