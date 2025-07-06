@@ -534,7 +534,7 @@ def generate_report(result: dict[str, dict[str, Any]], file: str):
         template = f.read()
     template = template.format(
         REV=file.removeprefix("benchmark_result_").removesuffix(".json"),
-        TIME=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+        TIME=time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime()),
         OS=f"{platform.system()} {platform.machine()}",
         PYTHON=sys.version,
         ORJSON_VER=orjson.__version__,
@@ -562,7 +562,7 @@ def generate_report_markdown(result: dict[str, dict[str, Any]], file: str):
         template = f.read()
     template = template.format(
         REV=file.removeprefix("benchmark_result_").removesuffix(".json"),
-        TIME=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+        TIME=time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime()),
         OS=f"{platform.system()} {platform.machine()}",
         PYTHON=sys.version,
         ORJSON_VER=orjson.__version__,
