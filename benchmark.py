@@ -81,14 +81,31 @@ CATEGORIES = LIBRARIES.keys()
 INDEXES = ["speed"]
 
 
+def gc_prepare():
+    """
+    Call collect once, and then disable automatic GC.
+    Return True if automatic GC was enabled.
+    """
+    gc.collect()
+    gc_was_enabled = gc.isenabled()
+    if gc_was_enabled:
+        gc.disable()
+    return gc_was_enabled
+
+
 def benchmark(repeat_time: int, func, *args):
     """
     Run repeat benchmark, disabling orjson utf-8 cache.
     returns time used (ns).
     """
-    # warm up
-    ssrjson.run_object_accumulate_benchmark(func, 100, args)
-    return ssrjson.run_object_accumulate_benchmark(func, repeat_time, args)
+    gc_was_enabled = gc_prepare()
+    try:
+        # warm up
+        ssrjson.run_object_accumulate_benchmark(func, 100, args)
+        return ssrjson.run_object_accumulate_benchmark(func, repeat_time, args)
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 def benchmark_unicode_arg(repeat_time: int, func, unicode: str, *args):
@@ -96,25 +113,16 @@ def benchmark_unicode_arg(repeat_time: int, func, unicode: str, *args):
     Run repeat benchmark, disabling orjson utf-8 cache.
     returns time used (ns).
     """
-    # warm up
-    ssrjson.run_unicode_accumulate_benchmark(func, 100, unicode, args)
-    return ssrjson.run_unicode_accumulate_benchmark(func, repeat_time, unicode, args)
-
-
-def benchmark_use_dump_cache(repeat_time: int, func, raw_bytes: bytes, *args):
-    """
-    let orjson use utf-8 cache for the same input.
-    returns time used (ns).
-    """
-    new_args = (json.loads(raw_bytes), *args)
-    # warm up
-    for _ in range(100):
-        ssrjson.run_object_benchmark(func, new_args)
-    #
-    total = 0
-    for _ in range(repeat_time):
-        total += ssrjson.run_object_benchmark(func, new_args)
-    return total
+    gc_was_enabled = gc_prepare()
+    try:
+        # warm up
+        ssrjson.run_unicode_accumulate_benchmark(func, 100, unicode, args)
+        return ssrjson.run_unicode_accumulate_benchmark(
+            func, repeat_time, unicode, args
+        )
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 def benchmark_invalidate_dump_cache(repeat_time: int, func, raw_bytes: bytes, *args):
@@ -123,18 +131,25 @@ def benchmark_invalidate_dump_cache(repeat_time: int, func, raw_bytes: bytes, *a
     so we need to invalidate it.
     returns time used (ns).
     """
+    # prepare identical data, without sharing objects
     data_warmup = [json.loads(raw_bytes) for _ in range(10)]
     data = [json.loads(raw_bytes) for _ in range(repeat_time)]
-    # warm up
-    for i in range(10):
-        new_args = (data_warmup[i], *args)
-        ssrjson.run_object_benchmark(func, new_args)
-    #
-    total = 0
-    for i in range(repeat_time):
-        new_args = (data[i], *args)
-        total += ssrjson.run_object_benchmark(func, new_args)
-    return total
+    # disable GC
+    gc_was_enabled = gc_prepare()
+    try:
+        # warm up
+        for i in range(10):
+            new_args = (data_warmup[i], *args)
+            ssrjson.run_object_benchmark(func, new_args)
+        #
+        total = 0
+        for i in range(repeat_time):
+            new_args = (data[i], *args)
+            total += ssrjson.run_object_benchmark(func, new_args)
+        return total
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 def get_benchmark_files() -> list[pathlib.Path]:
@@ -162,8 +177,8 @@ def _run_benchmark(
 
     for name, func in funcs.items():
         benchmark_func = pick_benchmark_func()
-        gc.collect()
-        t0 = time.perf_counter()
+
+        # t0 = time.perf_counter()
         # cpu_times_before = process.cpu_times()
         # ctx_before = process.num_ctx_switches()
         # mem_before = process.memory_info().rss
@@ -171,7 +186,7 @@ def _run_benchmark(
         speed = benchmark_func(repeat_times, func, input_data)
 
         # End measuring
-        t1 = time.perf_counter()
+        # t1 = time.perf_counter()
         # cpu_times_after = process.cpu_times()
         # ctx_after = process.num_ctx_switches()
 
@@ -188,7 +203,7 @@ def _run_benchmark(
             # "ctx_vol": voluntary_ctx,
             # "ctx_invol": involuntary_ctx,
             # "mem_diff": mem_after - mem_before,
-            "wall_time": t1 - t0,
+            # "wall_time": t1 - t0,
         }
 
     funcs_iter = iter(funcs.items())
