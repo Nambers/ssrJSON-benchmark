@@ -17,8 +17,7 @@ import time
 import platform
 import re
 import pathlib
-
-# import psutil
+import importlib.util
 import math
 import matplotlib as mpl
 
@@ -271,20 +270,29 @@ def get_real_output_file_name():
 
 
 def get_cpu_name() -> str:
-    cpu_name: str = platform.processor()
-    if not cpu_name or cpu_name == "":
-        with open(file="/proc/cpuinfo", mode="r") as file:
-            cpu_info_lines = file.readlines()
-            for line in cpu_info_lines:
-                if "model name" in line:
-                    cpu_name = re.sub(
-                        pattern=r"model name\s+:\s+", repl="", string=line
-                    )
-                    # remove extra spaces
-                    cpu_name = re.sub(pattern=r"\s+", repl=" ", string=cpu_name).strip()
-                    break
+    cpuinfo_spec = importlib.util.find_spec("cpuinfo")
+    if cpuinfo_spec is not None:
+        import cpuinfo
 
-    return cpu_name
+        cpu_name = cpuinfo.get_cpu_info().get("brand_raw", "UnknownCPU")
+    else:
+        # fallback
+        cpu_name: str = platform.processor()
+        if cpu_name.strip() == "":
+            # linux fallback
+            if os.path.exists("/proc/cpuinfo"):
+                with open(file="/proc/cpuinfo", mode="r") as file:
+                    cpu_info_lines = file.readlines()
+                    for line in cpu_info_lines:
+                        if "model name" in line:
+                            cpu_name = re.sub(
+                                pattern=r"model name\s+:\s+", repl="", string=line
+                            )
+                            break
+            else:
+                cpu_name = "UnknownCPU"
+    # merge nearby spaces
+    return re.sub(pattern=r"\s+", repl=" ", string=cpu_name).strip()
 
 
 def get_mem_total() -> str:
@@ -505,7 +513,7 @@ def generate_pdf_report(
 
 def generate_report(result: dict[str, dict[str, Any]], file: str):
     file = file.removesuffix(".json")
-    report_name = f"{file}_report.pdf"
+    report_name = f"{file}.pdf"
 
     figures = []
 
@@ -543,7 +551,7 @@ def generate_report(result: dict[str, dict[str, Any]], file: str):
 
 def generate_report_markdown(result: dict[str, dict[str, Any]], file: str):
     file = file.removesuffix(".json")
-    report_name = f"{file}_report.md"
+    report_name = f"{file}.md"
     report_folder = os.path.join(CUR_DIR, f"{file}_report")
 
     # mkdir
