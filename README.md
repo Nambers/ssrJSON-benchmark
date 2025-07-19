@@ -14,16 +14,14 @@ Quick jump for
 
 ## Usage
 
-To generate a benchmark report, you need to build `ssrJSON` with the `BUILD_BENCHMARK` option enabled:
+To generate a benchmark report, you need to install `ssrJSON` either by fetched [PyPi](https://pypi.org/project/ssrjson/) or built from [source](https://github.com/Antares0982/ssrjson), and toolkit(`ssrjson_benchmark`) from this repo by:
 
 ```bash
-CC=clang CXX=clang++ cmake -B build . -DBUILD_BENCHMARK=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+python -m build
+pip install dist/*.whl
 ```
 
-After building, copy the resulting `ssrJSON.so` file from the build directory to the root of this project.
-
-Then, run the benchmark script:
+Then run the benchmark script:
 
 ```bash
 python benchmark.py
@@ -31,9 +29,9 @@ python benchmark.py
 
 ## Benchmark options
 
-- `-m` output in Markdown instead of PDF.
-- `-f <json_path>` used exists benchmark json result.
-- `--process-bytes <bytes_num>` Total process bytes per test, default 1e8.
+* `-m` output in Markdown instead of PDF.
+* `-f <json_path>` used exists benchmark json result.
+* `--process-bytes <bytes_num>` Total process bytes per test, default 1e8.
 
 ## Notes
 
@@ -44,4 +42,3 @@ python benchmark.py
 * The performance of JSON encoding is primarily constrained by the speed of writing to the buffer, whereas decoding performance is mainly limited by the frequent invocation of CPython interfaces for object creation. During decoding, both ssrJSON and orjson employ short key caching to reduce the number of object creations, and this caching mechanism is global in both cases. As a result, decoding benchmark tests may not accurately reflect the conditions encountered in real-world production environments.
 
 * The files simple_object.json and simple_object_zh.json do not represent real-world data; they are solely used to compare the performance of the fast path. Therefore, the benchmark results should not be interpreted as indicative of actual performance.
-

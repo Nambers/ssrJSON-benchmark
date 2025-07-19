@@ -20,6 +20,7 @@ import pathlib
 import importlib.util
 import math
 import matplotlib as mpl
+import ssrjson_benchmark
 
 mpl.rcParams["svg.fonttype"] = "none"
 
@@ -100,8 +101,10 @@ def benchmark(repeat_time: int, func, *args):
     gc_was_enabled = gc_prepare()
     try:
         # warm up
-        ssrjson.run_object_accumulate_benchmark(func, 100, args)
-        return ssrjson.run_object_accumulate_benchmark(func, repeat_time, args)
+        ssrjson_benchmark.run_object_accumulate_benchmark(func, 100, args)
+        return ssrjson_benchmark.run_object_accumulate_benchmark(
+            func, repeat_time, args
+        )
     finally:
         if gc_was_enabled:
             gc.enable()
@@ -115,8 +118,8 @@ def benchmark_unicode_arg(repeat_time: int, func, unicode: str, *args):
     gc_was_enabled = gc_prepare()
     try:
         # warm up
-        ssrjson.run_unicode_accumulate_benchmark(func, 100, unicode, args)
-        return ssrjson.run_unicode_accumulate_benchmark(
+        ssrjson_benchmark.run_unicode_accumulate_benchmark(func, 100, unicode, args)
+        return ssrjson_benchmark.run_unicode_accumulate_benchmark(
             func, repeat_time, unicode, args
         )
     finally:
@@ -139,12 +142,12 @@ def benchmark_invalidate_dump_cache(repeat_time: int, func, raw_bytes: bytes, *a
         # warm up
         for i in range(10):
             new_args = (data_warmup[i], *args)
-            ssrjson.run_object_benchmark(func, new_args)
+            ssrjson_benchmark.run_object_benchmark(func, new_args)
         #
         total = 0
         for i in range(repeat_time):
             new_args = (data[i], *args)
-            total += ssrjson.run_object_benchmark(func, new_args)
+            total += ssrjson_benchmark.run_object_benchmark(func, new_args)
         return total
     finally:
         if gc_was_enabled:
@@ -217,12 +220,12 @@ def _run_benchmark(
                 if "bytes" in mode:
                     size = len(output)
                 else:
-                    _, size, _, _ = ssrjson.inspect_pyunicode(output)
+                    _, size, _, _ = ssrjson_benchmark.inspect_pyunicode(output)
             else:
                 size = (
                     len(input_data)
                     if isinstance(input_data, bytes)
-                    else ssrjson.inspect_pyunicode(input_data)[1]
+                    else ssrjson_benchmark.inspect_pyunicode(input_data)[1]
                 )
             cur_obj["ssrjson_bytes_per_sec"] = ssrjson.dumps(
                 size * repeat_times / (cur_obj[name]["speed"] / _NS_IN_ONE_S)
@@ -246,7 +249,7 @@ def run_file_benchmark(
     base_file_name = os.path.basename(file)
     curfile_obj = result[base_file_name]
     curfile_obj["byte_size"] = bytes_size = len(raw_bytes)
-    kind, str_size, is_ascii, _ = ssrjson.inspect_pyunicode(raw)
+    kind, str_size, is_ascii, _ = ssrjson_benchmark.inspect_pyunicode(raw)
     curfile_obj["pyunicode_size"] = str_size
     curfile_obj["pyunicode_kind"] = kind
     curfile_obj["pyunicode_is_ascii"] = is_ascii
@@ -443,6 +446,23 @@ def generate_pdf_report(
     text_obj.textLine(header)
     c.drawText(text_obj)
 
+    # Wrap heading_info lines if overflow
+    max_width = width - 80  # 40 margin on both sides
+    wrapped_heading_info = []
+    for line in heading_info:
+        while c.stringWidth(line, PDF_TEXT_FONT, 10) > max_width:
+            # Find a split point
+            split_idx = int(max_width // c.stringWidth(" ", PDF_TEXT_FONT, 10))
+            # Try to split at nearest space before split_idx
+            space_idx = line.rfind(" ", 0, split_idx)
+            if space_idx == -1:
+                space_idx = split_idx
+            wrapped_heading_info.append(line[:space_idx])
+            # TODO fixed indent
+            line = "                " + line[space_idx:].lstrip()
+        wrapped_heading_info.append(line)
+    heading_info = wrapped_heading_info
+
     c.setFont(PDF_TEXT_FONT, 10)
     text_obj = c.beginText(40, height - 70)
     for line in heading_info:
@@ -535,7 +555,7 @@ def generate_report(result: dict[str, dict[str, Any]], file: str):
     template = template.format(
         REV=file.removeprefix("benchmark_result_").removesuffix(".json"),
         TIME=time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime()),
-        OS=f"{platform.system()} {platform.machine()}",
+        OS=f"{platform.system()} {platform.machine()} {platform.release()} {platform.version()}",
         PYTHON=sys.version,
         ORJSON_VER=orjson.__version__,
         SIMD_FLAGS=ssrjson.get_current_features(),
@@ -563,7 +583,7 @@ def generate_report_markdown(result: dict[str, dict[str, Any]], file: str):
     template = template.format(
         REV=file.removeprefix("benchmark_result_").removesuffix(".json"),
         TIME=time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime()),
-        OS=f"{platform.system()} {platform.machine()}",
+        OS=f"{platform.system()} {platform.machine()} {platform.release()} {platform.version()}",
         PYTHON=sys.version,
         ORJSON_VER=orjson.__version__,
         SIMD_FLAGS=ssrjson.get_current_features(),
