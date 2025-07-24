@@ -23,7 +23,7 @@
 #include <Python.h>
 #include <stdbool.h>
 
-#define SSRJSON_BENCHMARK_VERSION "0.0.1"
+#define SSRJSON_BENCHMARK_VERSION "0.0.1a0"
 
 /** compiler builtin check (since gcc 10.0, clang 2.6, icc 2021) */
 #ifndef has_builtin
@@ -319,7 +319,7 @@ static PyMethodDef ssrjson_benchmark_methods[] = {
 
 static struct PyModuleDef moduledef = {
         PyModuleDef_HEAD_INIT,
-        "ssrjson_benchmark",       /* m_name */
+        "_ssrjson_benchmark",       /* m_name */
         0,                         /* m_doc */
         0,                         /* m_size */
         ssrjson_benchmark_methods, /* m_methods */
@@ -329,7 +329,7 @@ static struct PyModuleDef moduledef = {
         NULL                       /* m_free */
 };
 
-PyMODINIT_FUNC PyInit_ssrjson_benchmark(void) {
+PyMODINIT_FUNC PyInit__ssrjson_benchmark(void) {
     PyObject *module;
     // check if module already exists
     if ((module = PyState_FindModule(&moduledef)) != NULL) {

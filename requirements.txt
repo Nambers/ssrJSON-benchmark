@@ -1,6 +1,5 @@
 matplotlib
 orjson
-psutil
 reportlab
 svglib
 py-cpuinfo

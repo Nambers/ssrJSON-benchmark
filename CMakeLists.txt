@@ -66,7 +66,7 @@ add_library(ssrjson_benchmark SHARED ${SRC_FILES})
 target_link_libraries(ssrjson_benchmark PUBLIC ${Python3_LIBRARIES})
 set_target_properties(ssrjson_benchmark PROPERTIES PREFIX "")
 target_include_directories(ssrjson_benchmark PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src> ${Python3_INCLUDE_DIRS})
-
+set_target_properties(ssrjson_benchmark PROPERTIES OUTPUT_NAME "_ssrjson_benchmark")
 # ------------------------------------------------------------------------------
 if(XCODE)
     set(SSRJSON_BENCHMARK_FLAGS)

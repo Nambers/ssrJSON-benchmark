@@ -2,16 +2,9 @@ import os
 import shutil
 import subprocess
 
-from setuptools import Extension, setup
+from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from pathlib import Path
-
-
-def check_version(version_str: str):
-    l = version_str.split(".")
-    for val in l:
-        if not val.isdigit():
-            raise ValueError(f"Invalid version string: {version_str}")
 
 
 def find_version(src_file_content: str):
@@ -20,7 +13,6 @@ def find_version(src_file_content: str):
     for line in src_file_content.splitlines():
         if line.startswith(prefix):
             version = line[len(prefix) :].strip()[1:-1]
-            check_version(version)
             return version
     raise RuntimeError("Cannot find SSRJSON_BENCHMARK_VERSION in source file")
 
@@ -50,17 +42,17 @@ class CMakeBuild(build_ext):
         subprocess.check_call(build_cmd)
 
         if os.name == "nt":
-            built_filename = "Release/ssrjson_benchmark.dll"
-            target_filename = "ssrjson_benchmark.pyd"
+            built_filename = "Release/_ssrjson_benchmark.dll"
+            target_filename = "_ssrjson_benchmark.pyd"
         else:
-            built_filename = "ssrjson_benchmark.so"
+            built_filename = "_ssrjson_benchmark.so"
             target_filename = built_filename
 
         built_path = os.path.join(build_dir, built_filename)
         if not os.path.exists(built_path):
             raise RuntimeError(f"Built library not found: {built_path}")
 
-        target_dir = self.build_lib
+        target_dir = self.build_lib + "/ssrjson_benchmark"
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
 
@@ -78,11 +70,30 @@ setup(
     long_description_content_type="text/markdown",
     ext_modules=[
         Extension(
-            "ssrjson_benchmark",
+            "_ssrjson_benchmark",
             sources=["src/benchmark.c"],
             language="c",
         )
     ],
+    packages=["ssrjson_benchmark", "ssrjson_benchmark._files"],
+    package_dir={"": "src"},
+    package_data={
+        "ssrjson_benchmark": ["template.md"],
+        "ssrjson_benchmark._files": ["*.json"],
+    },
+    include_package_data=True,
+    install_requires=[
+        "ssrjson",
+        "orjson",
+        "matplotlib",
+    ],
+    extras_require={
+        "all": [
+            "svglib",
+            "reportlab",
+            "py-cpuinfo",
+        ],
+    },
     cmdclass={
         "build_ext": CMakeBuild,
     },

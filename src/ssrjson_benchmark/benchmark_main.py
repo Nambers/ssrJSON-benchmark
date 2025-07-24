@@ -1,3 +1,4 @@
+import importlib
 import io
 import sys
 import os
@@ -5,39 +6,41 @@ import gc
 import json
 from collections import defaultdict
 from typing import Any, Callable
-import matplotlib.pyplot as plt
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from svglib.svglib import svg2rlg
-from svglib.fonts import FontMap
-from reportlab.graphics import renderPDF
 from typing import List
 import io
 import time
 import platform
 import re
 import pathlib
-import importlib.util
 import math
+from ssrjson_benchmark import _ssrjson_benchmark
+import matplotlib.pyplot as plt
 import matplotlib as mpl
-import ssrjson_benchmark
-
-mpl.rcParams["svg.fonttype"] = "none"
 
 import orjson
 import ssrjson
 
-font_map = FontMap()
-font_map.register_default_fonts()
+
+mpl.use("Agg")
+mpl.rcParams["svg.fonttype"] = "none"
+
+
+try:
+    from svglib.fonts import FontMap
+
+    font_map = FontMap()
+    font_map.register_default_fonts()
+    # workaround for matplotlib using 700 to represent bold font, but svg2rlg using 700 as normal.
+    font_map.register_font("Helvetica", weight="700", rlgFontName="Helvetica-Bold")
+except ImportError:
+    pass
 
 CUR_FILE = os.path.abspath(__file__)
 CUR_DIR = os.path.dirname(CUR_FILE)
+CWD = os.getcwd()
 _NS_IN_ONE_S = 1000000000
 
-PDF_PAGE_SIZE = A4
 PDF_HEADING_FONT = "Helvetica-Bold"
-# workaround for matplotlib using 700 to represent bold font, but svg2rlg using 700 as normal.
-font_map.register_font("Helvetica", weight="700", rlgFontName="Helvetica-Bold")
 PDF_TEXT_FONT = "Courier"
 
 # baseline is the first one.
@@ -101,8 +104,8 @@ def benchmark(repeat_time: int, func, *args):
     gc_was_enabled = gc_prepare()
     try:
         # warm up
-        ssrjson_benchmark.run_object_accumulate_benchmark(func, 100, args)
-        return ssrjson_benchmark.run_object_accumulate_benchmark(
+        _ssrjson_benchmark.run_object_accumulate_benchmark(func, 100, args)
+        return _ssrjson_benchmark.run_object_accumulate_benchmark(
             func, repeat_time, args
         )
     finally:
@@ -118,8 +121,8 @@ def benchmark_unicode_arg(repeat_time: int, func, unicode: str, *args):
     gc_was_enabled = gc_prepare()
     try:
         # warm up
-        ssrjson_benchmark.run_unicode_accumulate_benchmark(func, 100, unicode, args)
-        return ssrjson_benchmark.run_unicode_accumulate_benchmark(
+        _ssrjson_benchmark.run_unicode_accumulate_benchmark(func, 100, unicode, args)
+        return _ssrjson_benchmark.run_unicode_accumulate_benchmark(
             func, repeat_time, unicode, args
         )
     finally:
@@ -142,12 +145,12 @@ def benchmark_invalidate_dump_cache(repeat_time: int, func, raw_bytes: bytes, *a
         # warm up
         for i in range(10):
             new_args = (data_warmup[i], *args)
-            ssrjson_benchmark.run_object_benchmark(func, new_args)
+            _ssrjson_benchmark.run_object_benchmark(func, new_args)
         #
         total = 0
         for i in range(repeat_time):
             new_args = (data[i], *args)
-            total += ssrjson_benchmark.run_object_benchmark(func, new_args)
+            total += _ssrjson_benchmark.run_object_benchmark(func, new_args)
         return total
     finally:
         if gc_was_enabled:
@@ -220,12 +223,12 @@ def _run_benchmark(
                 if "bytes" in mode:
                     size = len(output)
                 else:
-                    _, size, _, _ = ssrjson_benchmark.inspect_pyunicode(output)
+                    _, size, _, _ = _ssrjson_benchmark.inspect_pyunicode(output)
             else:
                 size = (
                     len(input_data)
                     if isinstance(input_data, bytes)
-                    else ssrjson_benchmark.inspect_pyunicode(input_data)[1]
+                    else _ssrjson_benchmark.inspect_pyunicode(input_data)[1]
                 )
             cur_obj["ssrjson_bytes_per_sec"] = ssrjson.dumps(
                 size * repeat_times / (cur_obj[name]["speed"] / _NS_IN_ONE_S)
@@ -249,11 +252,11 @@ def run_file_benchmark(
     base_file_name = os.path.basename(file)
     curfile_obj = result[base_file_name]
     curfile_obj["byte_size"] = bytes_size = len(raw_bytes)
-    kind, str_size, is_ascii, _ = ssrjson_benchmark.inspect_pyunicode(raw)
+    kind, str_size, is_ascii, _ = _ssrjson_benchmark.inspect_pyunicode(raw)
     curfile_obj["pyunicode_size"] = str_size
     curfile_obj["pyunicode_kind"] = kind
     curfile_obj["pyunicode_is_ascii"] = is_ascii
-    repeat_times = (process_bytes + bytes_size - 1) // bytes_size
+    repeat_times = int((process_bytes + bytes_size - 1) // bytes_size)
 
     for mode in LIBRARIES.keys():
         _run_benchmark(curfile_obj, repeat_times, raw_bytes, mode)
@@ -424,7 +427,9 @@ def plot_relative_ops(data: dict, doc_name: str, index_s: str) -> io.BytesIO:
     return buf
 
 
-def draw_page_number(c: canvas.Canvas, page_num: int):
+def draw_page_number(c: "canvas.Canvas", page_num: int):
+    from reportlab.lib.pagesizes import A4
+
     width, _ = A4
     c.setFont("Helvetica-Oblique", 8)  # italic
     c.setFillColorRGB(0.5, 0.5, 0.5)  # grey
@@ -434,8 +439,13 @@ def draw_page_number(c: canvas.Canvas, page_num: int):
 def generate_pdf_report(
     figures: List[List[io.BytesIO]], header_text: str, output_pdf_path: str
 ) -> str:
-    c = canvas.Canvas(output_pdf_path, pagesize=PDF_PAGE_SIZE)
-    width, height = PDF_PAGE_SIZE
+    from reportlab.pdfgen import canvas
+    from reportlab.graphics import renderPDF
+    from svglib.svglib import svg2rlg
+    from reportlab.lib.pagesizes import A4
+
+    c = canvas.Canvas(output_pdf_path, pagesize=A4)
+    width, height = A4
 
     # heading info
     heading = header_text.splitlines()
@@ -531,7 +541,7 @@ def generate_pdf_report(
     return output_pdf_path
 
 
-def generate_report(result: dict[str, dict[str, Any]], file: str):
+def generate_report(result: dict[str, dict[str, Any]], file: str, out_dir: str = CWD):
     file = file.removesuffix(".json")
     report_name = f"{file}.pdf"
 
@@ -562,17 +572,20 @@ def generate_report(result: dict[str, dict[str, Any]], file: str):
         CHIPSET=get_cpu_name(),
         MEM=get_mem_total(),
     )
-    generate_pdf_report(
+    out_path = generate_pdf_report(
         figures,
         header_text=template,
-        output_pdf_path=os.path.join(CUR_DIR, report_name),
+        output_pdf_path=os.path.join(out_dir, report_name),
     )
+    print(f"Report saved to {out_path}")
 
 
-def generate_report_markdown(result: dict[str, dict[str, Any]], file: str):
+def generate_report_markdown(
+    result: dict[str, dict[str, Any]], file: str, out_dir: str = CWD
+):
     file = file.removesuffix(".json")
     report_name = f"{file}.md"
-    report_folder = os.path.join(CUR_DIR, f"{file}_report")
+    report_folder = os.path.join(out_dir, f"{file}_report")
 
     # mkdir
     if not os.path.exists(report_folder):
@@ -610,9 +623,10 @@ def generate_report_markdown(result: dict[str, dict[str, Any]], file: str):
 
     with open(os.path.join(report_folder, report_name), "w") as f:
         f.write(template)
+    print(f"Report saved to {os.path.join(report_folder, report_name)}")
 
 
-def run_benchmark(process_bytes: int):
+def run_benchmark(process_bytes: int = 1e8):
     file = get_real_output_file_name()
     if os.path.exists(file):
         os.remove(file)
@@ -629,43 +643,10 @@ def run_benchmark(process_bytes: int):
     return result, file
 
 
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "-f", "--file", help="record JSON file", required=False, default=None
-    )
-    parser.add_argument(
-        "-m",
-        "--markdown",
-        help="Generate markdown report",
-        required=False,
-        action="store_true",
-    )
-    parser.add_argument(
-        "--process-bytes",
-        help="Total process bytes per test, default 1e8",
-        required=False,
-        default=100050000,
-        type=int,
-    )
-    args = parser.parse_args()
-
-    if args.file:
-        with open(args.file, "r") as f:
-            j = json.load(f)
-        file = args.file.split("/")[-1]
-    else:
-        j, file = run_benchmark(args.process_bytes)
-        file = file.split("/")[-1]
-
-    if args.markdown:
-        generate_report_markdown(j, file)
-    else:
-        generate_report(j, file)
-
-
-if __name__ == "__main__":
-    main()
+def run_benchmark_default():
+    """
+    Run default benchmark with default parameters. Generate report in PDF.
+    """
+    j, file = run_benchmark()
+    file = file.split("/")[-1]
+    generate_report(j, file)
