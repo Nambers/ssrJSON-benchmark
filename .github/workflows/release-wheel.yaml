@@ -26,22 +26,21 @@ jobs:
         python-version: 3.${{ matrix.pyver }}
 
     - name: Build Wheel
-      id: build-wheel
       run: |
         python -m pip install build
-        python -m build
-        echo "ARTIFACT_NAME=$(readlink -f dist/*.whl)" >> $GITHUB_OUTPUT
+        python -m build --wheel
 
-    - name: Print Wheel Hash
+    - name: Audit Wheel
+      id: audit-wheel
       run: |
-        sha256sum ${{ steps.build-wheel.outputs.ARTIFACT_NAME }} | awk '{print $1}' > sha256sum.txt
-        cat sha256sum.txt
+        python -m pip install auditwheel
+        auditwheel repair dist/*.whl
 
     - name: Upload Wheel To Artifact
       uses: actions/upload-artifact@v4
       with:
         name: linux-ssrjson-benchmark-wheel-python3${{ matrix.pyver }}
-        path: ${{ steps.build-wheel.outputs.ARTIFACT_NAME }}
+        path: wheelhouse/*.whl
 
   Windows-Build-Wheel:
     runs-on: windows-latest
@@ -62,7 +61,7 @@ jobs:
     - name: Build Wheel
       run: |
         python -m pip install build
-        python -m build
+        python -m build --wheel
 
     - name: Upload Wheel To Artifact
       uses: actions/upload-artifact@v4
@@ -128,7 +127,7 @@ jobs:
     
     - name: Publish package distributions to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
-      if: ${{ github.event.inputs.dry-run != 'true' }}
+      if: ${{ !github.event.inputs.dry-run }}
       with:
         packages-dir: ./artifacts/
         print-hash: true
