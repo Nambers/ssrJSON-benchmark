@@ -127,7 +127,7 @@ jobs:
     
     - name: Publish package distributions to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
-      if: ${{ !github.event.inputs.dry-run }}
+      if: ${{ github.event.inputs.dry-run == 'false' }}
       with:
         packages-dir: ./artifacts/
         print-hash: true
