@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       dry-run:
-        description: 'Set to true to only print files without making changes'
+        description: 'Set to true to only print files without publishing'
         required: false
         default: true
         type: boolean 
@@ -70,9 +70,37 @@ jobs:
         name: windows-ssrjson-benchmark-wheel-python3${{ matrix.pyver }}
         path: dist/*.whl
 
+  Build-Tarball:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Build Tarball
+      id: build-tarball
+      run: |
+        python -m pip install build
+        python -m build --sdist
+        echo "ARTIFACT_NAME=$(readlink -f dist/*.tar.gz)" >> $GITHUB_OUTPUT
+
+    - name: Print Tarball Hash
+      run: |
+        sha256sum ${{ steps.build-tarball.outputs.ARTIFACT_NAME }} | awk '{print $1}' > sha256sum.txt
+        cat sha256sum.txt
+
+    - name: Upload Tarball To Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ssrjson-benchmark-tarball
+        path: ${{ steps.build-tarball.outputs.ARTIFACT_NAME }}
+
   Publish:
     runs-on: ubuntu-latest
     needs:
+      - Build-Tarball
       - Linux-Build-Wheel
       - Windows-Build-Wheel
     permissions:
@@ -100,7 +128,7 @@ jobs:
     
     - name: Publish package distributions to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
-      if: ${{ !github.event.inputs['dry-run'] }}
+      if: ${{ github.event.inputs.dry-run != 'true' }}
       with:
         packages-dir: ./artifacts/
         print-hash: true
