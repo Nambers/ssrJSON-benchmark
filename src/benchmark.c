@@ -23,7 +23,7 @@
 #include <Python.h>
 #include <stdbool.h>
 
-#define SSRJSON_BENCHMARK_VERSION "0.0.1a0"
+#define SSRJSON_BENCHMARK_VERSION "0.0.1b0"
 
 /** compiler builtin check (since gcc 10.0, clang 2.6, icc 2021) */
 #ifndef has_builtin
