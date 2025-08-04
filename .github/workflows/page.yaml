@@ -19,29 +19,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Generate index.html with grouped & sorted PDFs
         run: |
-          mkdir -p output
-
-          echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Benchmark Results</title></head><body>' > output/index.html
-          echo '<h1>Benchmark Results</h1>' >> output/index.html
-
-          # Find all subdirs in results
-          for dir in $(find results -mindepth 1 -maxdepth 1 -type d | sort); do
-            name=$(basename "$dir")
-            echo "<h2>${name}</h2><ul>" >> output/index.html
-
-            # Sort PDFs in dir by modification time descending
-            find "$dir" -name '*.pdf' -type f -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2- | while read -r file; do
-              echo "<li><a href='${file}'>$(basename "$file")</a></li>" >> output/index.html
-              mkdir -p "output/$(dirname "$file")"
-              cp "$file" "output/$file"
-            done
-
-            echo '</ul>' >> output/index.html
-          done
-
-          echo '</body></html>' >> output/index.html
+          python3 .github/html_gen.py
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
