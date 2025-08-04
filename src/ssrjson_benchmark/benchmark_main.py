@@ -263,7 +263,7 @@ def run_file_benchmark(
 
 
 def get_head_rev_name():
-    return getattr(ssrjson, "__version__", ssrjson.ssrjson.__version__)
+    return getattr(ssrjson, "__version__", None) or getattr(ssrjson, "ssrjson").__version__
 
 
 def get_real_output_file_name():

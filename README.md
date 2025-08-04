@@ -10,13 +10,13 @@ The [ssrJSON](https://github.com/Antares0982/ssrjson) benchmark repository.
 
 ## Benchmark Results
 
-The benchmark results can be found in [results](results). Contributing your benchmark result is welcomed.
+The benchmark results can be found in [website results](https://ikuyo.dev/ssrJSON-benchmark/) or [GitHub results](https://github.com/Nambers/ssrJSON-benchmark/tree/main/results). Contributing your benchmark result is welcomed.
 
 Quick jump for
 
-* [x86-64-v2, SSE4.2](results/SSE4.2)
-* [x86-64-v3, AVX2](results/AVX2)
-* [x86-64-v4, AVX512](results/AVX512)
+* [x86-64-v2, SSE4.2](https://github.com/Nambers/ssrJSON-benchmark/tree/main/results/SSE4.2)
+* [x86-64-v3, AVX2](https://github.com/Nambers/ssrJSON-benchmark/tree/main/results/AVX2)
+* [x86-64-v4, AVX512](https://github.com/Nambers/ssrJSON-benchmark/tree/main/results/AVX512)
 
 ## Usage
 
