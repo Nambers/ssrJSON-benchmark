@@ -230,9 +230,10 @@ def _run_benchmark(
                     if isinstance(input_data, bytes)
                     else _ssrjson_benchmark.inspect_pyunicode(input_data)[1]
                 )
-            cur_obj["ssrjson_bytes_per_sec"] = ssrjson.dumps(
+            cur_obj["ssrjson_bytes_per_sec"] = (
                 size * repeat_times / (cur_obj[name]["speed"] / _NS_IN_ONE_S)
             )
+
         for index in INDEXES:
             basename = name.split(".")[0]
             if baseline_data[index] == 0:
@@ -263,7 +264,9 @@ def run_file_benchmark(
 
 
 def get_head_rev_name():
-    return getattr(ssrjson, "__version__", None) or getattr(ssrjson, "ssrjson").__version__
+    return (
+        getattr(ssrjson, "__version__", None) or getattr(ssrjson, "ssrjson").__version__
+    )
 
 
 def get_real_output_file_name():
@@ -354,6 +357,7 @@ def plot_relative_ops(data: dict, doc_name: str, index_s: str) -> io.BytesIO:
 
     for ax, cat in zip(axs, CATEGORIES):
         vals = [1.0] + [data[cat][f"{name}_{index_s}_ratio"] for name in libs[1:]]
+        gbps = (data[cat]["ssrjson_bytes_per_sec"] * 8) / (1024**3)
 
         for xi, val, col in zip(x_positions, vals, colors):
             ax.bar(xi, val, width=bar_width, color=col)
@@ -366,6 +370,18 @@ def plot_relative_ops(data: dict, doc_name: str, index_s: str) -> io.BytesIO:
                 fontsize=9,
                 color=get_ratio_color(val),
             )
+
+        ssrjson_index = libs.index("ssrjson")
+        ax.text(
+            x_positions[ssrjson_index],
+            vals[ssrjson_index] / 2,
+            f"{gbps:.2f} Gb/s",
+            ha="center",
+            va="center",
+            fontsize=10,
+            color="#2c3e50",
+            fontweight="bold",
+        )
 
         # baseline line
         ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
