@@ -5,7 +5,7 @@ on:
       dry-run:
         description: 'Set to true to only print files without publishing'
         required: false
-        default: true
+        default: false
         type: boolean 
 
 jobs:
@@ -124,6 +124,23 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.x'
+
+    - name: Extract version from pyproject.toml
+      id: extract-version
+      run: |
+          VERSION=$(grep -Po '(?<=^version = ")[^"]*' pyproject.toml)
+          if [ -z "$VERSION" ]; then
+              echo "Error: Version not found in pyproject.toml"
+              exit 1
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    - name: Release
+      uses: softprops/action-gh-release@v2
+      if: ${{ github.event.inputs.dry-run == 'false' }}
+      with:
+          files: "./artifacts/*"
+          tag_name: "v${{ env.VERSION }}"
     
     - name: Publish package distributions to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1

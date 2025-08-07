@@ -2,23 +2,8 @@ import os
 import shutil
 import subprocess
 
-from setuptools import Extension, find_packages, setup
+from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
-from pathlib import Path
-
-
-def find_version(src_file_content: str):
-    # find macro SSRJSON_BENCHMARK_VERSION
-    prefix = "#define SSRJSON_BENCHMARK_VERSION"
-    for line in src_file_content.splitlines():
-        if line.startswith(prefix):
-            version = line[len(prefix) :].strip()[1:-1]
-            return version
-    raise RuntimeError("Cannot find SSRJSON_BENCHMARK_VERSION in source file")
-
-
-with open("./src/benchmark.c", "r", encoding="utf-8") as f:
-    version_string = find_version(f.read())
 
 
 class CMakeBuild(build_ext):
@@ -63,11 +48,6 @@ class CMakeBuild(build_ext):
 
 
 setup(
-    name="ssrjson_benchmark",
-    version=version_string,
-    description="Benchmark for ssrJSON",
-    long_description=Path("README.md").read_text(encoding="utf-8"),
-    long_description_content_type="text/markdown",
     ext_modules=[
         Extension(
             "_ssrjson_benchmark",

@@ -23,8 +23,6 @@
 #include <Python.h>
 #include <stdbool.h>
 
-#define SSRJSON_BENCHMARK_VERSION "0.0.1rc1"
-
 /** compiler builtin check (since gcc 10.0, clang 2.6, icc 2021) */
 #ifndef has_builtin
 #    ifdef __has_builtin
@@ -341,14 +339,5 @@ PyMODINIT_FUNC PyInit__ssrjson_benchmark(void) {
     if (module == NULL) {
         return NULL;
     }
-    // add version string
-    {
-        int err = PyModule_AddStringConstant(module, "__version__", SSRJSON_BENCHMARK_VERSION);
-        if (err) {
-            Py_DECREF(module);
-            return NULL;
-        }
-    }
-
     return module;
 }

@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ssrjson-benchmark"
-version = "0.0.1rc1"
+version = "0.0.1rc2"
 authors = [
-  { name="Eritque Arcus", email="eritque-arcus@ikuyo.dev" },
-  { name = "Antares", email = "antares0982@gmail.com" }
+    { name = "Eritque Arcus", email = "eritque-arcus@ikuyo.dev" },
+    { name = "Antares", email = "antares0982@gmail.com" },
 ]
 description = "benchmark of ssrJSON"
 readme = "README.md"
 requires-python = ">=3.9"
+keywords = ["ssrjson", "benchmark", "json"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
@@ -22,7 +23,13 @@ classifiers = [
 ]
 license = "MIT"
 license-files = ["LICENSE"]
+dependencies = ["ssrjson", "orjson", "matplotlib"]
+
+[project.optional-dependencies]
+pdf = ["svglib", "reportlab"]
+cpuinfo = ["py-cpuinfo"]
 
 [project.urls]
 Homepage = "https://github.com/Nambers/ssrJSON-benchmark"
 Issues = "https://github.com/Nambers/ssrJSON-benchmark/issues"
+Repository = "https://github.com/Nambers/ssrJSON-benchmark.git"

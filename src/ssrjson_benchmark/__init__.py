@@ -4,7 +4,9 @@ from .benchmark_main import (
     generate_report,
     run_benchmark_default,
 )
-from ._ssrjson_benchmark import __version__
+from importlib.metadata import version
+
+__version__ = version("ssrjson-benchmark")
 
 __all__ = [
     "run_benchmark",
