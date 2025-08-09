@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools >= 77.0.3"]
+# requires = ["setuptools >= 77.0.3"]
+requires = ["setuptools >= 64"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -21,8 +22,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-license = "MIT"
-license-files = ["LICENSE"]
+# setuptools >= 77
+# license = "MIT"
+# license-files = ["LICENSE"]
+# setuptools < 77 but deprecated
+license = { file = "LICENSE" }
 dependencies = ["ssrjson", "orjson", "matplotlib"]
 
 [project.optional-dependencies]
