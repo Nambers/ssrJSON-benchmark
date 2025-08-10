@@ -357,7 +357,7 @@ def plot_relative_ops(data: dict, doc_name: str, index_s: str) -> io.BytesIO:
 
     for ax, cat in zip(axs, CATEGORIES):
         vals = [1.0] + [data[cat][f"{name}_{index_s}_ratio"] for name in libs[1:]]
-        gbps = (data[cat]["ssrjson_bytes_per_sec"] * 8) / (1024**3)
+        gbps = (data[cat]["ssrjson_bytes_per_sec"]) / (1024**3)
 
         for xi, val, col in zip(x_positions, vals, colors):
             ax.bar(xi, val, width=bar_width, color=col)
@@ -375,7 +375,7 @@ def plot_relative_ops(data: dict, doc_name: str, index_s: str) -> io.BytesIO:
         ax.text(
             x_positions[ssrjson_index],
             vals[ssrjson_index] / 2,
-            f"{gbps:.2f} Gb/s",
+            f"{gbps:.2f} GB/s",
             ha="center",
             va="center",
             fontsize=10,
