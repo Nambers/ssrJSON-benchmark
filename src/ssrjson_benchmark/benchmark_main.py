@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 
 import orjson
+import ujson
 import ssrjson
 
 
@@ -44,37 +45,46 @@ PDF_HEADING_FONT = "Helvetica-Bold"
 PDF_TEXT_FONT = "Courier"
 
 # baseline is the first one.
-LIBRARIES_COLORS = {"json": "#74c476", "orjson": "#6baed6", "ssrjson": "#fd8d3c"}
+LIBRARIES_COLORS = {
+    "json": "#74c476",
+    "ujson": "#c994c7",
+    "orjson": "#2c7fb8",
+    "ssrjson": "#fd8d3c",
+}
 LIBRARIES: dict[str, dict[str, Callable[[str | bytes], Any]]] = {
     "dumps": {
         "json.dumps": json.dumps,
+        "ujson.dumps": ujson.dumps,
         "orjson.dumps+decode": lambda x: orjson.dumps(x).decode("utf-8"),
         "ssrjson.dumps": ssrjson.dumps,
     },
     "dumps(indented2)": {
         "json.dumps": lambda x: json.dumps(x, indent=2),
-        "orjson.dumps+decode": lambda x: orjson.dumps(
-            x, option=orjson.OPT_INDENT_2
-        ).decode("utf-8"),
+        "ujson.dumps+decode": lambda x: ujson.dumps(x, indent=2),
+        "orjson.dumps": lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2),
         "ssrjson.dumps": lambda x: ssrjson.dumps(x, indent=2),
     },
     "dumps_to_bytes": {
         "json.dumps+encode": lambda x: json.dumps(x).encode("utf-8"),
+        "ujson.dumps_to_bytes": lambda x: ujson.dumps(x).encode("utf-8"),
         "orjson.dumps": orjson.dumps,
         "ssrjson.dumps_to_bytes": ssrjson.dumps_to_bytes,
     },
     "dumps_to_bytes(indented2)": {
         "json.dumps+encode": lambda x: json.dumps(x, indent=2).encode("utf-8"),
+        "ujson.dumps_to_bytes": lambda x: ujson.dumps(x, indent=2).encode("utf-8"),
         "orjson.dumps": lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2),
         "ssrjson.dumps_to_bytes": lambda x: ssrjson.dumps_to_bytes(x, indent=2),
     },
     "loads(str)": {
         "json.loads": json.loads,
+        "ujson.loads": ujson.loads,
         "orjson.loads": orjson.loads,
         "ssrjson.loads": ssrjson.loads,
     },
     "loads(bytes)": {
         "json.loads": json.loads,
+        "ujson.loads": ujson.loads,
         "orjson.loads": orjson.loads,
         "ssrjson.loads": ssrjson.loads,
     },
@@ -557,6 +567,22 @@ def generate_pdf_report(
     return output_pdf_path
 
 
+def fetch_header(rev) -> str:
+    with open(os.path.join(CUR_DIR, "template.md"), "r") as f:
+        template = f.read()
+    return template.format(
+        REV=rev,
+        TIME=time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime()),
+        OS=f"{platform.system()} {platform.machine()} {platform.release()} {platform.version()}",
+        PYTHON=sys.version,
+        ORJSON_VER=orjson.__version__,
+        UJSON_VER=ujson.__version__,
+        SIMD_FLAGS=ssrjson.get_current_features(),
+        CHIPSET=get_cpu_name(),
+        MEM=get_mem_total(),
+    )
+
+
 def generate_report(result: dict[str, dict[str, Any]], file: str, out_dir: str = CWD):
     file = file.removesuffix(".json")
     report_name = f"{file}.pdf"
@@ -576,17 +602,8 @@ def generate_report(result: dict[str, dict[str, Any]], file: str, out_dir: str =
             )
         figures.append(tmp)
 
-    with open(os.path.join(CUR_DIR, "template.md"), "r") as f:
-        template = f.read()
-    template = template.format(
-        REV=file.removeprefix("benchmark_result_").removesuffix(".json"),
-        TIME=time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime()),
-        OS=f"{platform.system()} {platform.machine()} {platform.release()} {platform.version()}",
-        PYTHON=sys.version,
-        ORJSON_VER=orjson.__version__,
-        SIMD_FLAGS=ssrjson.get_current_features(),
-        CHIPSET=get_cpu_name(),
-        MEM=get_mem_total(),
+    template = fetch_header(
+        file.removeprefix("benchmark_result_").removesuffix(".json")
     )
     out_path = generate_pdf_report(
         figures,
@@ -607,17 +624,8 @@ def generate_report_markdown(
     if not os.path.exists(report_folder):
         os.makedirs(report_folder)
 
-    with open(os.path.join(CUR_DIR, "template.md"), "r") as f:
-        template = f.read()
-    template = template.format(
-        REV=file.removeprefix("benchmark_result_").removesuffix(".json"),
-        TIME=time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime()),
-        OS=f"{platform.system()} {platform.machine()} {platform.release()} {platform.version()}",
-        PYTHON=sys.version,
-        ORJSON_VER=orjson.__version__,
-        SIMD_FLAGS=ssrjson.get_current_features(),
-        CHIPSET=get_cpu_name(),
-        MEM=get_mem_total(),
+    template = fetch_header(
+        file.removeprefix("benchmark_result_").removesuffix(".json")
     )
 
     for index_s in INDEXES:

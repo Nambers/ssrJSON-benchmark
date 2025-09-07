@@ -62,18 +62,18 @@ setup(
         "ssrjson_benchmark._files": ["*.json"],
     },
     include_package_data=True,
-    install_requires=[
-        "ssrjson",
-        "orjson",
-        "matplotlib",
-    ],
-    extras_require={
-        "all": [
-            "svglib",
-            "reportlab",
-            "py-cpuinfo",
-        ],
-    },
+    # install_requires=[
+    #     "ssrjson",
+    #     "orjson",
+    #     "matplotlib",
+    # ],
+    # extras_require={
+    #     "all": [
+    #         "svglib",
+    #         "reportlab",
+    #         "py-cpuinfo",
+    #     ],
+    # },
     cmdclass={
         "build_ext": CMakeBuild,
     },

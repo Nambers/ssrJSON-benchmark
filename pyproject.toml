@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ssrjson-benchmark"
-version = "0.0.2"
+version = "0.0.3"
 authors = [
     { name = "Eritque Arcus", email = "eritque-arcus@ikuyo.dev" },
     { name = "Antares", email = "antares0982@gmail.com" },
@@ -27,7 +27,7 @@ classifiers = [
 # license-files = ["LICENSE"]
 # setuptools < 77 but deprecated
 license = { file = "LICENSE" }
-dependencies = ["ssrjson", "orjson", "matplotlib"]
+dependencies = ["ssrjson", "orjson", "ujson", "matplotlib"]
 
 [project.optional-dependencies]
 pdf = ["svglib", "reportlab"]
