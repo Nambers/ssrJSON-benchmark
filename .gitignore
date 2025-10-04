@@ -1,5 +1,9 @@
 benchmark_result*.json
 /*.pdf
+/.nix-pyenv
+/.direnv
+/result
+/.vscode
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
