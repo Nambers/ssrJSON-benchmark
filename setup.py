@@ -51,7 +51,7 @@ setup(
     ext_modules=[
         Extension(
             "_ssrjson_benchmark",
-            sources=["src/benchmark.c"],
+            sources=["src/_ssrjson_benchmark.c"],
             language="c",
         )
     ],
@@ -62,18 +62,6 @@ setup(
         "ssrjson_benchmark._files": ["*.json"],
     },
     include_package_data=True,
-    # install_requires=[
-    #     "ssrjson",
-    #     "orjson",
-    #     "matplotlib",
-    # ],
-    # extras_require={
-    #     "all": [
-    #         "svglib",
-    #         "reportlab",
-    #         "py-cpuinfo",
-    #     ],
-    # },
     cmdclass={
         "build_ext": CMakeBuild,
     },

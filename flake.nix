@@ -36,9 +36,18 @@
           );
     in
     {
-      devShells = forAllSystems (pkgs: rec {
-        default = pkgs.callPackage ./shell.nix { persist = true; };
-      });
+      devShells = forAllSystems (
+        pkgs:
+        let
+          ssrjson = ssrjson_.packages.${pkgs.system}.default;
+        in
+        {
+          default = pkgs.callPackage ./shell.nix {
+            persist = true;
+            inherit ssrjson;
+          };
+        }
+      );
       packages = forAllSystems (
         pkgs:
         let

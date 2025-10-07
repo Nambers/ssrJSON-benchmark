@@ -4,6 +4,7 @@ benchmark_result*.json
 /.direnv
 /result
 /.vscode
+/build-*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

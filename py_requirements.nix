@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, ssrjson, ... }:
 pypkgs: with pypkgs; [
   matplotlib
   orjson
@@ -7,4 +7,6 @@ pypkgs: with pypkgs; [
   svglib
   build
   pip
+  ujson
+  ssrjson
 ]

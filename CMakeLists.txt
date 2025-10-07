@@ -59,7 +59,7 @@ message("CMAKE_SYSTEM_PROCESSOR = ${CMAKE_SYSTEM_PROCESSOR}")
 
 # set ssrjson_benchmark src files
 set(SRC_FILES
-    src/benchmark.c
+    src/_ssrjson_benchmark.c
 )
 
 add_library(ssrjson_benchmark SHARED ${SRC_FILES})

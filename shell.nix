@@ -4,6 +4,8 @@
   persist ? false,
   mkShell ? pkgs.mkShell,
   callPackage ? pkgs.callPackage,
+  ssrjson,
+  ...
 }:
 let
   optionalAttrs = lib.attrsets.optionalAttrs;
@@ -12,7 +14,7 @@ let
   # define version
   usingPython = pkgs.python313;
   # import required python packages
-  requiredPythonPackages = callPackage ./py_requirements.nix { };
+  requiredPythonPackages = callPackage ./py_requirements.nix { inherit ssrjson; };
   # create python environment
   pyenv = usingPython.withPackages requiredPythonPackages;
   #

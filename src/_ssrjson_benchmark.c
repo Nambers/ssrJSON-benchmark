@@ -76,15 +76,15 @@ usize perf_counter(void) {
 
 #endif
 
-typedef struct PyUnicodeNewCallArg {
+typedef struct PyUnicodeCopyInfo {
     Py_ssize_t size;
     int kind;
     Py_UCS4 max_char;
     bool valid;
-} PyUnicodeNewCallArg;
+} PyUnicodeCopyInfo;
 
-PyObject *_copy_unicode(PyObject *unicode, PyUnicodeNewCallArg *call_arg) {
-    if (!call_arg->valid) {
+PyObject *_copy_unicode(PyObject *unicode, PyUnicodeCopyInfo *unicode_copy_info) {
+    if (!unicode_copy_info->valid) {
         // create copy of unicode object.
         int kind = PyUnicode_KIND(unicode);
         Py_UCS4 max_char;
@@ -98,15 +98,16 @@ PyObject *_copy_unicode(PyObject *unicode, PyUnicodeNewCallArg *call_arg) {
             max_char = 0xff;
         }
         //
-        call_arg->size = PyUnicode_GET_LENGTH(unicode);
-        call_arg->kind = kind;
-        call_arg->max_char = max_char;
-        call_arg->valid = true;
+        unicode_copy_info->size = PyUnicode_GET_LENGTH(unicode);
+        unicode_copy_info->kind = kind;
+        unicode_copy_info->max_char = max_char;
+        unicode_copy_info->valid = true;
     }
 
-    PyObject *unicode_copy = PyUnicode_New(call_arg->size, call_arg->max_char);
+    PyObject *unicode_copy = PyUnicode_New(unicode_copy_info->size, unicode_copy_info->max_char);
+    if (!unicode_copy) return NULL;
     memcpy(PyUnicode_DATA(unicode_copy), PyUnicode_DATA(unicode),
-           call_arg->size * call_arg->kind);
+           unicode_copy_info->size * unicode_copy_info->kind);
     return unicode_copy;
 }
 
@@ -129,61 +130,33 @@ PyObject *_parse_additional_args(PyObject *additional_args) {
     return new_args;
 }
 
-PyObject *run_unicode_accumulate_benchmark(PyObject *self, PyObject *args,
-                                           PyObject *kwargs) {
-    PyObject *callable;
-    usize repeat;
-    PyObject *unicode;
-    PyObject *additional_args = NULL;
-    static const char *kwlist[] = {"func", "repeat", "unicode", "args", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKO|O", (char **)kwlist,
-                                     &callable, &repeat, &unicode,
-                                     &additional_args)) {
+PyObject *copy_unicode_list_invalidate_cache(PyObject *self, PyObject *args, PyObject *kwargs) {
+    static const char *kwlist[] = {"s", "size", NULL};
+    PyObject *s;
+    usize size;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OK", (char **)kwlist, &s, &size)) {
         PyErr_SetString(PyExc_TypeError, "Invalid argument");
-        goto fail;
+        return NULL;
     }
-    if (!PyCallable_Check(callable)) {
-        PyErr_SetString(PyExc_TypeError, "First argument must be callable");
-        goto fail;
+    if (!PyUnicode_CheckExact(s)) {
+        PyErr_SetString(PyExc_TypeError, "First argument must be str, not other types or subclass of str");
+        return NULL;
     }
-    if (!PyUnicode_Check(unicode)) {
-        PyErr_SetString(PyExc_TypeError, "Third argument must be unicode");
-        goto fail;
+    PyObject *ret = PyList_New(size);
+    if (!ret) {
+        return NULL;
     }
-    PyUnicodeNewCallArg call_arg;
-    call_arg.valid = false;
-    usize total = 0;
-    for (usize i = 0; i < repeat; i++) {
-        // create copy of unicode object.
-        PyObject *new_args = _parse_additional_args(additional_args);
-        if (!new_args)
-            goto fail;
-        PyObject *unicode_copy = _copy_unicode(unicode, &call_arg);
-        if (!unicode_copy) {
-            Py_DECREF(new_args);
-            goto fail;
+    PyUnicodeCopyInfo unicode_copy_info;
+    unicode_copy_info.valid = false;
+    for (usize i = 0; i < size; i++) {
+        PyObject *s_copy = _copy_unicode(s, &unicode_copy_info);
+        if (!s_copy) {
+            Py_DECREF(ret);
+            return NULL;
         }
-        PyTuple_SET_ITEM(new_args, 0, unicode_copy);
-        usize start = perf_counter();
-        PyObject *result = PyObject_Call(callable, new_args, NULL);
-        usize end = perf_counter();
-        assert(unicode_copy->ob_refcnt == 1);
-        Py_DECREF(new_args);
-        unicode_copy = NULL;
-        new_args = NULL;
-        if (unlikely(!result)) {
-            if (!PyErr_Occurred()) {
-                PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
-            }
-            goto fail;
-        } else {
-            Py_DECREF(result);
-        }
-        total += end - start;
+        PyList_SET_ITEM(ret, i, s_copy);
     }
-    return PyLong_FromUnsignedLongLong(total);
-fail:;
-    return NULL;
+    return ret;
 }
 
 PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
@@ -197,6 +170,7 @@ PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
         PyErr_SetString(PyExc_TypeError, "Invalid argument");
         goto fail;
     }
+    //
     if (!PyCallable_Check(callable)) {
         PyErr_SetString(PyExc_TypeError, "First argument must be callable");
         goto fail;
@@ -205,6 +179,7 @@ PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
         PyErr_SetString(PyExc_TypeError, "Third argument must be tuple");
         goto fail;
     }
+    //
     usize total = 0;
     for (usize i = 0; i < repeat; i++) {
         usize start = perf_counter();
@@ -308,7 +283,7 @@ fail:;
 }
 
 static PyMethodDef ssrjson_benchmark_methods[] = {
-        {"run_unicode_accumulate_benchmark", (PyCFunction)run_unicode_accumulate_benchmark, METH_VARARGS | METH_KEYWORDS, "Benchmark."},
+        {"copy_unicode_list_invalidate_cache", (PyCFunction)copy_unicode_list_invalidate_cache, METH_VARARGS | METH_KEYWORDS, "Copy unicode list invalidate cache."},
         {"run_object_accumulate_benchmark", (PyCFunction)run_object_accumulate_benchmark, METH_VARARGS | METH_KEYWORDS, "Benchmark."},
         {"run_object_benchmark", (PyCFunction)run_object_benchmark, METH_VARARGS | METH_KEYWORDS, "Benchmark."},
         {"inspect_pyunicode", (PyCFunction)inspect_pyunicode, METH_VARARGS | METH_KEYWORDS, "Inspect PyUnicode."},
@@ -317,7 +292,7 @@ static PyMethodDef ssrjson_benchmark_methods[] = {
 
 static struct PyModuleDef moduledef = {
         PyModuleDef_HEAD_INIT,
-        "_ssrjson_benchmark",       /* m_name */
+        "_ssrjson_benchmark",      /* m_name */
         0,                         /* m_doc */
         0,                         /* m_size */
         ssrjson_benchmark_methods, /* m_methods */

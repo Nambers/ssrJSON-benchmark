@@ -46,11 +46,11 @@
         "nixpkgs-legacy": "nixpkgs-legacy"
       },
       "locked": {
-        "lastModified": 1759586353,
-        "narHash": "sha256-GjqVvWqUqTdkaoiOJe3lkxF1uSdpkHtTglCR0bf4U6A=",
+        "lastModified": 1759660610,
+        "narHash": "sha256-rJ0TDv/aBO9ZI0MFLtd5Br8SVa6dkLqEoy7/6ONgeXQ=",
         "owner": "antares0982",
         "repo": "ssrjson",
-        "rev": "7821e8441e471b45f7257a9e1060f13a3e4ada7f",
+        "rev": "b8c478421f1a596d05e4d6d38f2e35349ae61a58",
         "type": "github"
       },
       "original": {
