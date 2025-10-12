@@ -10,7 +10,8 @@ import sys
 import time
 from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any, Callable, List
-
+import multiprocessing
+import typing
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import orjson
@@ -266,6 +267,12 @@ def _get_processed_size(func: Callable, input_data, is_dumps):
     return size
 
 
+def benchmark_multiprocess_wrapper(
+    benchmarker, args, result_multiprocess_queue: multiprocessing.Queue
+):
+    ret = benchmarker(*args)
+    result_multiprocess_queue.put(ret)
+
 def _run_benchmark(
     cur_result_file: BenchmarkResultPerFile,
     repeat_times: int,
@@ -277,10 +284,20 @@ def _run_benchmark(
 
     input_data = benchmark_group.input_preprocessor(input_data)
 
+    result_multiprocess_queue = multiprocessing.Queue()  # type: ignore
+
     for benchmark_target in benchmark_group.functions:
-        speed = benchmark_group.benchmarker(
-            repeat_times, benchmark_target.func, input_data
+        p = multiprocessing.Process(
+            target=benchmark_multiprocess_wrapper,
+            args=(
+                benchmark_group.benchmarker,
+                (repeat_times, benchmark_target.func, input_data),
+                result_multiprocess_queue,
+            ),
         )
+        p.start()
+        p.join()
+        speed = result_multiprocess_queue.get()
         cur_lib = cur_target[benchmark_target.library_name]
         cur_lib.speed = speed
 
