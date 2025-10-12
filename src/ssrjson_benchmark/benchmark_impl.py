@@ -273,12 +273,15 @@ def benchmark_multiprocess_wrapper(
     ret = benchmarker(*args)
     result_multiprocess_queue.put(ret)
 
+
 def _run_benchmark(
     cur_result_file: BenchmarkResultPerFile,
     repeat_times: int,
     input_data: str | bytes,
     benchmark_group: BenchmarkGroup,
 ):
+    if sys.platform == "linux" and sys.version_info >= (3, 14):
+        multiprocessing.set_start_method("fork")
     group_name = benchmark_group.group_name
     cur_target = cur_result_file[group_name]
 
