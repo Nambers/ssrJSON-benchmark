@@ -42,7 +42,7 @@
           ssrjson = ssrjson_.packages.${pkgs.system}.default;
         in
         {
-          default = pkgs.callPackage ./shell.nix {
+          default = pkgs.callPackage ./dev_tools/nix_files/shell.nix {
             persist = true;
             inherit ssrjson;
           };
@@ -54,7 +54,7 @@
           ssrjson = ssrjson_.packages.${pkgs.system}.default;
         in
         rec {
-          default = pkgs.callPackage ./package.nix { inherit ssrjson; };
+          default = pkgs.callPackage ./dev_tools/nix_files/package.nix { inherit ssrjson; };
           inherit ssrjson;
         }
       );
