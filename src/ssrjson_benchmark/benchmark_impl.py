@@ -2,6 +2,7 @@ import gc
 import io
 import json
 import math
+import multiprocessing
 import os
 import pathlib
 import platform
@@ -10,8 +11,7 @@ import sys
 import time
 from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any, Callable, List
-import multiprocessing
-import typing
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import orjson
@@ -280,8 +280,6 @@ def _run_benchmark(
     input_data: str | bytes,
     benchmark_group: BenchmarkGroup,
 ):
-    if sys.platform == "linux" and sys.version_info >= (3, 14):
-        multiprocessing.set_start_method("fork")
     group_name = benchmark_group.group_name
     cur_target = cur_result_file[group_name]
 
@@ -752,11 +750,28 @@ def parse_file_result(j):
     return BenchmarkFinalResult.parse(j)
 
 
+def is_unix_except_macos():
+    system = platform.system()
+    return system in ("Linux", "AIX", "FreeBSD")
+
+
+def _set_multiprocessing_start_method():
+    try:
+        multiprocessing.set_start_method("fork")
+    except RuntimeError as e:
+        if "context has already been set" not in str(e):
+            raise
+
+
 def run_benchmark(files: list[pathlib.Path], process_bytes: int = int(1e8)):
     """
     Generate a JSON result of benchmark.
     Also returns a result object.
     """
+    # Set multiprocessing start method to fork, if Python version is 3.14+ on Unix
+    if sys.version_info >= (3, 14) and is_unix_except_macos():
+        _set_multiprocessing_start_method()
+
     file = _get_real_output_file_name()
 
     result = BenchmarkFinalResult()
