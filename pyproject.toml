@@ -1,6 +1,6 @@
 [build-system]
-# requires = ["setuptools >= 77.0.3"]
-requires = ["setuptools >= 64"]
+requires = ["setuptools >= 77.0.3"]
+# requires = ["setuptools >= 64"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,7 +12,7 @@ authors = [
 ]
 description = "benchmark of ssrJSON"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = ["ssrjson", "benchmark", "json"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -23,10 +23,10 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 # setuptools >= 77
-# license = "MIT"
-# license-files = ["LICENSE"]
+license = "MIT"
+license-files = ["LICENSE"]
 # setuptools < 77 but deprecated
-license = { file = "LICENSE" }
+# license = { file = "LICENSE" }
 dependencies = ["ssrjson", "orjson", "ujson", "matplotlib"]
 
 [project.optional-dependencies]

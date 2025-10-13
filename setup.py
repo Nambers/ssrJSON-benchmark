@@ -6,25 +6,38 @@ from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 
+def run_check(cmd):
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        print(f"command failed: `{' '.join(cmd)}`")
+        if e.stdout:
+            print(f"stdout: {e.stdout}")
+        print(f"stderr: {e.stderr}")
+        raise
+    except Exception as e:
+        print(f"command failed: `{' '.join(cmd)}`")
+        print(f"error: {e}")
+        raise
+
 class CMakeBuild(build_ext):
     def run(self):
         build_dir = os.path.abspath("build")
         if not os.path.exists(build_dir):
             os.makedirs(build_dir)
-        cmake_cmd = [
+        run_check([
             "cmake",
             "-DCMAKE_BUILD_TYPE=Release",
             ".",
             "-B",
             "build",
-        ]
-        subprocess.check_call(cmake_cmd)
+        ])
 
         if os.name == "nt":
             build_cmd = ["cmake", "--build", "build", "--config", "Release"]
         else:
             build_cmd = ["cmake", "--build", "build"]
-        subprocess.check_call(build_cmd)
+        run_check(build_cmd)
 
         if os.name == "nt":
             built_filename = "Release/_ssrjson_benchmark.dll"
