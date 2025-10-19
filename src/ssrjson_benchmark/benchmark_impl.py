@@ -280,13 +280,6 @@ def _get_processed_size(func: Callable, input_data, is_dumps):
     return size
 
 
-def benchmark_multiprocess_wrapper(
-    benchmarker, args, result_multiprocess_queue: multiprocessing.Queue
-):
-    ret = benchmarker(*args)
-    result_multiprocess_queue.put(ret)
-
-
 def _run_benchmark(
     cur_result_file: BenchmarkResultPerFile,
     repeat_times: int,
@@ -299,8 +292,6 @@ def _run_benchmark(
 
     input_data = benchmark_group.input_preprocessor(input_data)
 
-    result_multiprocess_queue = multiprocessing.Queue()  # type: ignore
-
     for benchmark_target in benchmark_group.functions:
         prefix = f"[{benchmark_target.library_name}][{benchmark_group.group_name}]"
         print(
@@ -308,17 +299,9 @@ def _run_benchmark(
             + (" " * max(0, 40 - len(prefix)))
             + f"repeat_times={repeat_times} times_per_bin={times_per_bin}"
         )
-        p = multiprocessing.Process(
-            target=benchmark_multiprocess_wrapper,
-            args=(
-                benchmark_group.benchmarker,
-                (repeat_times, times_per_bin, benchmark_target.func, input_data),
-                result_multiprocess_queue,
-            ),
+        speed = benchmark_group.benchmarker(
+            repeat_times, times_per_bin, benchmark_target.func, input_data
         )
-        p.start()
-        p.join()
-        speed = result_multiprocess_queue.get()
         cur_lib = cur_target[benchmark_target.library_name]
         cur_lib.speed = speed
 
