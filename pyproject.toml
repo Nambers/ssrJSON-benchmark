@@ -27,7 +27,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 # setuptools < 77 but deprecated
 # license = { file = "LICENSE" }
-dependencies = ["ssrjson", "orjson", "ujson", "matplotlib"]
+dependencies = ["ssrjson", "orjson", "ujson", "matplotlib", "psutil"]
 
 [project.optional-dependencies]
 pdf = ["svglib", "reportlab"]
