@@ -407,7 +407,7 @@ def _get_mem_total() -> str:
     elif platform.system() == "Windows":
         import psutil
 
-        mem_total = psutil.virtual_memory().total // (1024 * 1024)
+        mem_total = psutil.virtual_memory().total // 1024 # in KB
     return f"{mem_total / (1024**2):.3f}GiB"
 
 
