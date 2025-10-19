@@ -37,10 +37,17 @@ def main():
         action="store_true",
     )
     parser.add_argument(
-        "--process-bytes",
-        help="Total process bytes per test, default 1e8",
+        "--process-gigabytes",
+        help="Total process gigabytes per test, default 0.1 (float)",
         required=False,
-        default=1e8,
+        default=0.1,
+        type=float,
+    )
+    parser.add_argument(
+        "--bin-process-megabytes",
+        help="Maximum bytes to process per read for binary formats, default 32 (int)",
+        required=False,
+        default=32,
         type=int,
     )
     parser.add_argument(
@@ -70,7 +77,14 @@ def main():
         result = parse_file_result(result_)
         file = args.file.split("/")[-1]
     else:
-        result, file = run_benchmark(benchmark_files_dir, args.process_bytes)
+        process_bytes = int(args.process_gigabytes * 1024 * 1024 * 1024)
+        bin_process_bytes = args.bin_process_megabytes * 1024 * 1024
+        if process_bytes <= 0 or bin_process_bytes <= 0:
+            print("process-gigabytes and bin-process-megabytes must be positive.")
+            sys.exit(1)
+        result, file = run_benchmark(
+            benchmark_files_dir, process_bytes, bin_process_bytes
+        )
         file = file.split("/")[-1]
 
     if args.markdown:

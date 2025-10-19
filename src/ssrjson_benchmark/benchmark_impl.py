@@ -44,6 +44,8 @@ LIBRARIES_COLORS = {
     "ssrjson": "#fd8d3c",
 }
 
+MAX_BIN_BYTES_SIZE = 512 * 1024 * 1024  # 512MiB
+
 
 class BenchmarkFunction:
     def __init__(self, func: Callable, library_name: str) -> None:
@@ -66,11 +68,13 @@ class BenchmarkGroup:
 
 
 # benchmarkers
-def _benchmark(repeat_time: int, func, *args):
+def _benchmark(repeat_time: int, times_per_bin: int, func, *args):
     """
     Run repeat benchmark, with utf-8 cache.
     returns time used (ns).
     """
+    # times_per_bin not used
+    # disable automatic GC
     gc_was_enabled = _gc_prepare()
     try:
         # warm up
@@ -83,53 +87,62 @@ def _benchmark(repeat_time: int, func, *args):
             gc.enable()
 
 
-def _benchmark_unicode_arg(repeat_time: int, func, unicode: str):
+def _benchmark_unicode_arg(repeat_time: int, times_per_bin: int, func, unicode: str):
     """
     Run repeat benchmark, disabling utf-8 cache.
     returns time used (ns).
     """
+    # disable automatic GC
     gc_was_enabled = _gc_prepare()
     try:
-        warmup_size = 100
-        # prepare identical data, without sharing objects
-        warmup_data = _ssrjson_benchmark.copy_unicode_list_invalidate_cache(
-            unicode, warmup_size
-        )
-        benchmark_data = _ssrjson_benchmark.copy_unicode_list_invalidate_cache(
-            unicode, repeat_time
-        )
-        # warm up
-        for i in range(warmup_size):
-            _ssrjson_benchmark.run_object_benchmark(func, (warmup_data[i],))
+        times_left = repeat_time
         total = 0
-        for i in range(repeat_time):
-            total += _ssrjson_benchmark.run_object_benchmark(func, (benchmark_data[i],))
+        while times_left != 0:
+            cur_bin_size = min(times_left, times_per_bin)
+            times_left -= cur_bin_size
+            # prepare identical data, without sharing objects
+            benchmark_data = _ssrjson_benchmark.copy_unicode_list_invalidate_cache(
+                unicode, cur_bin_size + 1
+            )
+            # warm up
+            _ssrjson_benchmark.run_object_benchmark(func, (benchmark_data[0],))
+            #
+            for i in range(1, cur_bin_size + 1):
+                total += _ssrjson_benchmark.run_object_benchmark(
+                    func, (benchmark_data[i],)
+                )
+            del benchmark_data
         return total
     finally:
         if gc_was_enabled:
             gc.enable()
 
 
-def _benchmark_invalidate_dump_cache(repeat_time: int, func, raw_bytes: bytes):
+def _benchmark_invalidate_dump_cache(
+    repeat_time: int, times_per_bin: int, func, raw_bytes: bytes
+):
     """
     Invalidate utf-8 cache for the same input.
     returns time used (ns).
     """
-    # prepare identical data, without sharing objects
-    data_warmup = [json.loads(raw_bytes) for _ in range(10)]
-    data = [json.loads(raw_bytes) for _ in range(repeat_time)]
-    # disable GC
+    # disable automatic GC
     gc_was_enabled = _gc_prepare()
     try:
-        # warm up
-        for i in range(10):
-            new_args = (data_warmup[i],)
-            _ssrjson_benchmark.run_object_benchmark(func, new_args)
-        #
+        times_left = repeat_time
         total = 0
-        for i in range(repeat_time):
-            new_args = (data[i],)
-            total += _ssrjson_benchmark.run_object_benchmark(func, new_args)
+        while times_left != 0:
+            cur_bin_size = min(times_left, times_per_bin)
+            times_left -= cur_bin_size
+            # prepare identical data, without sharing objects
+            benchmark_data = [json.loads(raw_bytes) for _ in range(cur_bin_size + 1)]
+            # warm up
+            _ssrjson_benchmark.run_object_benchmark(func, (benchmark_data[0],))
+            #
+            for i in range(1, cur_bin_size + 1):
+                total += _ssrjson_benchmark.run_object_benchmark(
+                    func, (benchmark_data[i],)
+                )
+            del benchmark_data
         return total
     finally:
         if gc_was_enabled:
@@ -277,6 +290,7 @@ def benchmark_multiprocess_wrapper(
 def _run_benchmark(
     cur_result_file: BenchmarkResultPerFile,
     repeat_times: int,
+    times_per_bin: int,
     input_data: str | bytes,
     benchmark_group: BenchmarkGroup,
 ):
@@ -288,11 +302,17 @@ def _run_benchmark(
     result_multiprocess_queue = multiprocessing.Queue()  # type: ignore
 
     for benchmark_target in benchmark_group.functions:
+        prefix = f"[{benchmark_target.library_name}][{benchmark_group.group_name}]"
+        print(
+            prefix
+            + (" " * max(0, 40 - len(prefix)))
+            + f"repeat_times={repeat_times} times_per_bin={times_per_bin}"
+        )
         p = multiprocessing.Process(
             target=benchmark_multiprocess_wrapper,
             args=(
                 benchmark_group.benchmarker,
-                (repeat_times, benchmark_target.func, input_data),
+                (repeat_times, times_per_bin, benchmark_target.func, input_data),
                 result_multiprocess_queue,
             ),
         )
@@ -326,6 +346,7 @@ def _run_file_benchmark(
     benchmark_libraries: dict[str, BenchmarkGroup],
     file: pathlib.Path,
     process_bytes: int,
+    bin_process_bytes: int,
 ):
     print(f"Running benchmark for {file.name}")
     with open(file, "rb") as f:
@@ -334,14 +355,19 @@ def _run_file_benchmark(
     base_file_name = os.path.basename(file)
     cur_result_file = BenchmarkResultPerFile()
     cur_result_file.byte_size = bytes_size = len(raw_bytes)
+    if bytes_size == 0:
+        raise RuntimeError(f"File {file} is empty.")
     kind, str_size, is_ascii, _ = _ssrjson_benchmark.inspect_pyunicode(raw)
     cur_result_file.pyunicode_size = str_size
     cur_result_file.pyunicode_kind = kind
     cur_result_file.pyunicode_is_ascii = is_ascii
     repeat_times = int((process_bytes + bytes_size - 1) // bytes_size)
+    times_per_bin = max(1, bin_process_bytes // bytes_size)
 
     for benchmark_group in benchmark_libraries.values():
-        _run_benchmark(cur_result_file, repeat_times, raw_bytes, benchmark_group)
+        _run_benchmark(
+            cur_result_file, repeat_times, times_per_bin, raw_bytes, benchmark_group
+        )
     return base_file_name, cur_result_file
 
 
@@ -763,7 +789,11 @@ def _set_multiprocessing_start_method():
             raise
 
 
-def run_benchmark(files: list[pathlib.Path], process_bytes: int = int(1e8)):
+def run_benchmark(
+    files: list[pathlib.Path],
+    process_bytes: int,
+    bin_process_bytes: int,
+):
     """
     Generate a JSON result of benchmark.
     Also returns a result object.
@@ -782,7 +812,9 @@ def run_benchmark(files: list[pathlib.Path], process_bytes: int = int(1e8)):
     result.catagories = sorted(list(benchmark_libraries.keys()))
 
     for bench_file in files:
-        k, v = _run_file_benchmark(benchmark_libraries, bench_file, process_bytes)
+        k, v = _run_file_benchmark(
+            benchmark_libraries, bench_file, process_bytes, bin_process_bytes
+        )
         result.results[k] = v
     output_result = result.dumps()
 
