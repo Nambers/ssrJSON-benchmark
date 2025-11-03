@@ -24,6 +24,11 @@ from .result_types import BenchmarkFinalResult, BenchmarkResultPerFile
 if TYPE_CHECKING:
     from reportlab.pdfgen import canvas
 
+_SSRJSON_HAS_WRITE_UTF8_CACHE = hasattr(ssrjson, "write_utf8_cache")
+
+if _SSRJSON_HAS_WRITE_UTF8_CACHE:
+    ssrjson.write_utf8_cache(False)
+
 mpl.use("Agg")
 mpl.rcParams["svg.fonttype"] = "none"
 
@@ -149,6 +154,31 @@ def _benchmark_invalidate_dump_cache(
             gc.enable()
 
 
+def _benchmark_with_dump_cache(
+    repeat_time: int, times_per_bin: int, func, raw_bytes: bytes
+):
+    # disable automatic GC
+    gc_was_enabled = _gc_prepare()
+    if _SSRJSON_HAS_WRITE_UTF8_CACHE:
+        ssrjson.write_utf8_cache(True)
+    try:
+        total = 0
+        data = json.loads(raw_bytes)
+        # warm up
+        _ssrjson_benchmark.run_object_benchmark(
+            func, (data,)
+        )  # allow `func`` to cache the UTF-8 source in data, at warm up stage
+        # the simplest benchmark way
+        for _ in range(repeat_time):
+            total += _ssrjson_benchmark.run_object_benchmark(func, (data,))
+        return total
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+        if _SSRJSON_HAS_WRITE_UTF8_CACHE:
+            ssrjson.write_utf8_cache(False)
+
+
 def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     return (
         BenchmarkGroup(
@@ -220,6 +250,45 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 ),
             ],
             "dumps_to_bytes(indented2)",
+        ),
+        BenchmarkGroup(
+            _benchmark_with_dump_cache,
+            [
+                BenchmarkFunction(
+                    lambda x: json.dumps(x, ensure_ascii=False).encode("utf-8"), "json"
+                ),
+                BenchmarkFunction(
+                    lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
+                    "ujson",
+                ),
+                BenchmarkFunction(orjson.dumps, "orjson"),
+                BenchmarkFunction(ssrjson.dumps_to_bytes, "ssrjson"),
+            ],
+            "dumps_to_bytes(cache)",
+        ),
+        BenchmarkGroup(
+            _benchmark_with_dump_cache,
+            [
+                BenchmarkFunction(
+                    lambda x: json.dumps(x, indent=2, ensure_ascii=False).encode(
+                        "utf-8"
+                    ),
+                    "json",
+                ),
+                BenchmarkFunction(
+                    lambda x: ujson.dumps(x, indent=2, ensure_ascii=False).encode(
+                        "utf-8"
+                    ),
+                    "ujson",
+                ),
+                BenchmarkFunction(
+                    lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2), "orjson"
+                ),
+                BenchmarkFunction(
+                    lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson"
+                ),
+            ],
+            "dumps_to_bytes(cache,indented2)",
         ),
         BenchmarkGroup(
             _benchmark_unicode_arg,
@@ -407,7 +476,7 @@ def _get_mem_total() -> str:
     elif platform.system() == "Windows":
         import psutil
 
-        mem_total = psutil.virtual_memory().total // 1024 # in KB
+        mem_total = psutil.virtual_memory().total // 1024  # in KB
     return f"{mem_total / (1024**2):.3f}GiB"
 
 
