@@ -4,3 +4,4 @@ ujson
 reportlab
 svglib
 py-cpuinfo
+psutil; platform_machine != 'aarch64'

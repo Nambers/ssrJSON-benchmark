@@ -22,16 +22,18 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-# setuptools >= 77
 license = "MIT"
 license-files = ["LICENSE"]
-# setuptools < 77 but deprecated
-# license = { file = "LICENSE" }
-dependencies = ["ssrjson", "orjson", "ujson", "matplotlib", "psutil"]
-
-[project.optional-dependencies]
-pdf = ["svglib", "reportlab"]
-cpuinfo = ["py-cpuinfo"]
+dependencies = [
+    "ssrjson",
+    "orjson",
+    "ujson",
+    "matplotlib",
+    "psutil; platform_machine == 'x86_64'",
+    "svglib",
+    "reportlab",
+    "py-cpuinfo",
+]
 
 [project.urls]
 Homepage = "https://github.com/Nambers/ssrJSON-benchmark"
