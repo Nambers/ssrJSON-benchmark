@@ -51,6 +51,9 @@ LIBRARIES_COLORS = {
 
 MAX_BIN_BYTES_SIZE = 512 * 1024 * 1024  # 512MiB
 
+INDEXED_GROUPS = ["UncachedDump", "CachedDumpLoad"]
+PRINT_INDEX_GROUPS = ["Uncached Dump", "Cached Dump & Load"]
+
 
 class BenchmarkFunction:
     def __init__(self, func: Callable, library_name: str) -> None:
@@ -63,11 +66,13 @@ class BenchmarkGroup:
         self,
         benchmarker: Callable,
         functions: list[BenchmarkFunction],
+        index_name: str,
         group_name: str,
         input_preprocessor: Callable[[Any], Any] = lambda x: x,
     ) -> None:
         self.benchmarker = benchmarker
         self.functions = functions
+        self.index_name = index_name
         self.group_name = group_name
         self.input_preprocessor = input_preprocessor
 
@@ -191,6 +196,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 BenchmarkFunction(lambda x: orjson.dumps(x).decode("utf-8"), "orjson"),
                 BenchmarkFunction(ssrjson.dumps, "ssrjson"),
             ],
+            INDEXED_GROUPS[0],
             "dumps",
         ),
         BenchmarkGroup(
@@ -210,6 +216,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 ),
                 BenchmarkFunction(lambda x: ssrjson.dumps(x, indent=2), "ssrjson"),
             ],
+            INDEXED_GROUPS[0],
             "dumps(indented2)",
         ),
         BenchmarkGroup(
@@ -225,6 +232,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 BenchmarkFunction(orjson.dumps, "orjson"),
                 BenchmarkFunction(ssrjson.dumps_to_bytes, "ssrjson"),
             ],
+            INDEXED_GROUPS[0],
             "dumps_to_bytes",
         ),
         BenchmarkGroup(
@@ -249,6 +257,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                     lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson"
                 ),
             ],
+            INDEXED_GROUPS[0],
             "dumps_to_bytes(indented2)",
         ),
         BenchmarkGroup(
@@ -264,6 +273,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 BenchmarkFunction(orjson.dumps, "orjson"),
                 BenchmarkFunction(ssrjson.dumps_to_bytes, "ssrjson"),
             ],
+            INDEXED_GROUPS[1],
             "dumps_to_bytes(cache)",
         ),
         BenchmarkGroup(
@@ -288,6 +298,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                     lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson"
                 ),
             ],
+            INDEXED_GROUPS[1],
             "dumps_to_bytes(cache,indented2)",
         ),
         BenchmarkGroup(
@@ -298,6 +309,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 BenchmarkFunction(orjson.loads, "orjson"),
                 BenchmarkFunction(ssrjson.loads, "ssrjson"),
             ],
+            INDEXED_GROUPS[1],
             "loads(str)",
             input_preprocessor=lambda x: x.decode("utf-8"),
         ),
@@ -309,6 +321,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 BenchmarkFunction(orjson.loads, "orjson"),
                 BenchmarkFunction(ssrjson.loads, "ssrjson"),
             ],
+            INDEXED_GROUPS[1],
             "loads(bytes)",
         ),
     )
@@ -399,8 +412,9 @@ def _run_file_benchmark(
     file: pathlib.Path,
     process_bytes: int,
     bin_process_bytes: int,
+    index_s: str,
 ):
-    print(f"Running benchmark for {file.name}")
+    print(f"Running benchmark for {file.name}, index group: {index_s}")
     with open(file, "rb") as f:
         raw_bytes = f.read()
     raw = raw_bytes.decode("utf-8")
@@ -417,9 +431,10 @@ def _run_file_benchmark(
     times_per_bin = max(1, bin_process_bytes // bytes_size)
 
     for benchmark_group in benchmark_libraries.values():
-        _run_benchmark(
-            cur_result_file, repeat_times, times_per_bin, raw_bytes, benchmark_group
-        )
+        if benchmark_group.index_name == index_s:
+            _run_benchmark(
+                cur_result_file, repeat_times, times_per_bin, raw_bytes, benchmark_group
+            )
     return base_file_name, cur_result_file
 
 
@@ -497,19 +512,17 @@ def _get_ratio_color(ratio: float) -> str:
         return "#8e44ad"  # purple (exceptional)
 
 
-def _plot_relative_ops(
-    catagories: list[str], data: dict, doc_name: str, index_s: str
-) -> io.BytesIO:
+def _plot_relative_ops(categories: list[str], data: dict, doc_name: str) -> io.BytesIO:
     libs = list(LIBRARIES_COLORS.keys())
     colors = [LIBRARIES_COLORS[n] for n in libs]
-    n = len(catagories)
+    n = len(categories)
     bar_width = 0.2
     inner_pad = 0
 
     fig, axs = plt.subplots(
         1,
         n,
-        figsize=(4 * n, 6),
+        figsize=(3 * n, 4),
         sharey=False,
         tight_layout=True,
         gridspec_kw={"wspace": 0},
@@ -517,7 +530,7 @@ def _plot_relative_ops(
 
     x_positions = [i * (bar_width + inner_pad) for i in range(len(libs))]
 
-    for ax, cat in zip(axs, catagories):
+    for ax, cat in zip(axs, categories):
         vals = [1.0] + [data[cat][name]["ratio"] for name in libs[1:]]
         gbps = (data[cat]["ssrjson_bytes_per_sec"]) / (1024**3)
 
@@ -690,11 +703,15 @@ def _generate_pdf_report(
 
     p = 0
 
-    for name, figs in zip(["speed"], figures):
+    for i in range(len(INDEXED_GROUPS)):
+        name = PRINT_INDEX_GROUPS[i]
+        figs = figures[i]
+
         text_obj = c.beginText()
         text_obj.setTextOrigin(40, y_pos)
         text_obj.setFont(PDF_HEADING_FONT, 14)
         text_obj.textLine(f"{name}")
+
         c.drawText(text_obj)
         c.bookmarkHorizontal(name, 0, y_pos + 20)
         c.addOutlineEntry(name, name, level=0)
@@ -749,25 +766,26 @@ def generate_report_pdf(result: BenchmarkFinalResult, file: str, out_dir: str = 
     """
     Generate PDF report, using `result`.
     """
-    catagories = result.catagories
     file = file.removesuffix(".json")
     report_name = f"{file}.pdf"
 
-    figures = []
+    figures = [[] for _ in range(len(INDEXED_GROUPS))]
+    benchmark_groups = _get_benchmark_libraries()
+    cats = [
+        [a for a in result.categories if benchmark_groups[a].index_name == index_name]
+        for index_name in INDEXED_GROUPS
+    ]
 
-    index_s = "speed"
-    tmp = []
-    for bench_filename in result.results:
-        print(f"Processing {bench_filename} (PDF)")
-        tmp.append(
-            _plot_relative_ops(
-                catagories,
-                result.results[bench_filename],
-                bench_filename,
-                index_s,
+    for i in range(len(INDEXED_GROUPS)):
+        for bench_filename in result.filenames:
+            print(f"Processing {bench_filename} [{INDEXED_GROUPS[i]}](PDF)")
+            figures[i].append(
+                _plot_relative_ops(
+                    cats[i],
+                    result.results[INDEXED_GROUPS[i]][bench_filename],
+                    bench_filename,
+                )
             )
-        )
-    figures.append(tmp)
 
     template = _fetch_header(
         file.removeprefix("benchmark_result_").removesuffix(".json")
@@ -799,23 +817,31 @@ def generate_report_markdown(
         file.removeprefix("benchmark_result_").removesuffix(".json")
     )
 
-    index_s = "speed"
-    template += f"\n\n## {index_s}\n\n"
-    for bench_filename in result.results:
-        print(f"Processing {bench_filename} (Markdown)")
-        with open(
-            os.path.join(report_folder, bench_filename + ".svg"), "wb"
-        ) as svg_file:
-            svg_file.write(
-                _plot_relative_ops(
-                    result.catagories,
-                    result.results[bench_filename],
-                    bench_filename,
-                    index_s,
-                ).getvalue()
-            )
-        # add svg
-        template += f"![{bench_filename}](./{bench_filename}.svg)\n\n"
+    benchmark_groups = _get_benchmark_libraries()
+    cats = [
+        [a for a in result.categories if benchmark_groups[a].index_name == index_name]
+        for index_name in INDEXED_GROUPS
+    ]
+
+    for i in range(len(INDEXED_GROUPS)):
+        template += f"\n\n## {PRINT_INDEX_GROUPS[i]}\n\n"
+        for bench_filename in result.filenames:
+            print(f"Processing {bench_filename} [{INDEXED_GROUPS[i]}](Markdown)")
+            with open(
+                os.path.join(
+                    report_folder, f"{bench_filename}_{INDEXED_GROUPS[i]}.svg"
+                ),
+                "wb",
+            ) as svg_file:
+                svg_file.write(
+                    _plot_relative_ops(
+                        cats[i],
+                        result.results[INDEXED_GROUPS[i]][bench_filename],
+                        bench_filename,
+                    ).getvalue()
+                )
+            # add svg
+            template += f"![{bench_filename}_{INDEXED_GROUPS[i]}](./{bench_filename}_{INDEXED_GROUPS[i]}.svg)\n\n"
 
     ret = os.path.join(report_folder, report_name)
     with open(ret, "w") as f:
@@ -861,13 +887,19 @@ def run_benchmark(
 
     benchmark_libraries = _get_benchmark_libraries()
 
-    result.catagories = sorted(list(benchmark_libraries.keys()))
+    result.categories = list(benchmark_libraries.keys())
 
-    for bench_file in files:
-        k, v = _run_file_benchmark(
-            benchmark_libraries, bench_file, process_bytes, bin_process_bytes
-        )
-        result.results[k] = v
+    for index_s in INDEXED_GROUPS:
+        result.results[index_s] = dict()
+        for bench_file in files:
+            k, v = _run_file_benchmark(
+                benchmark_libraries,
+                bench_file,
+                process_bytes,
+                bin_process_bytes,
+                index_s,
+            )
+            result.results[index_s][k] = v
     output_result = result.dumps()
 
     if os.path.exists(file):

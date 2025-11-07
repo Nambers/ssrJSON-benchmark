@@ -72,16 +72,21 @@ class BenchmarkResultPerFile(BenchmarkResultBase):
 
 
 class BenchmarkFinalResult(BenchmarkResultBase):
-    catagories: list[str]
-    results: dict[str, BenchmarkResultPerFile]
+    categories: list[str]
+    results: dict[str, dict[str, BenchmarkResultPerFile]]
+    filenames: set[str]
 
     @classmethod
-    def parse(cls, j):
+    def parse(cls, j: dict):
         ret = cls()
-        ret.catagories = j["catagories"]
+        ret.categories = j["categories"]
         ret.results = dict()
+        ret.filenames = set()
         for k, v in j["results"].items():
-            ret.results[k] = BenchmarkResultPerFile.parse(v)
+            ret.results[k] = dict()
+            for a, b in v.items():
+                ret.results[k][a] = BenchmarkResultPerFile.parse(b)
+                ret.filenames.add(a)
         return ret
 
     def dumps(self):
