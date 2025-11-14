@@ -51,8 +51,8 @@ LIBRARIES_COLORS = {
 
 MAX_BIN_BYTES_SIZE = 512 * 1024 * 1024  # 512MiB
 
-INDEXED_GROUPS = ["UncachedDump", "CachedDumpLoad"]
-PRINT_INDEX_GROUPS = ["Uncached Dump", "Cached Dump & Load"]
+INDEXED_GROUPS = ["load&dump", "dumps_to_bytes"]
+PRINT_INDEX_GROUPS = ["Load & Dump", "Dumps to Bytes"]
 
 
 class BenchmarkFunction:
@@ -187,6 +187,29 @@ def _benchmark_with_dump_cache(
 def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     return (
         BenchmarkGroup(
+            _benchmark_unicode_arg,
+            [
+                BenchmarkFunction(json.loads, "json"),
+                BenchmarkFunction(ujson.loads, "ujson"),
+                BenchmarkFunction(orjson.loads, "orjson"),
+                BenchmarkFunction(ssrjson.loads, "ssrjson"),
+            ],
+            INDEXED_GROUPS[0],
+            "loads(str)",
+            input_preprocessor=lambda x: x.decode("utf-8"),
+        ),
+        BenchmarkGroup(
+            _benchmark,
+            [
+                BenchmarkFunction(json.loads, "json"),
+                BenchmarkFunction(ujson.loads, "ujson"),
+                BenchmarkFunction(orjson.loads, "orjson"),
+                BenchmarkFunction(ssrjson.loads, "ssrjson"),
+            ],
+            INDEXED_GROUPS[0],
+            "loads(bytes)",
+        ),
+        BenchmarkGroup(
             _benchmark_invalidate_dump_cache,
             [
                 BenchmarkFunction(lambda x: json.dumps(x, ensure_ascii=False), "json"),
@@ -232,7 +255,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 BenchmarkFunction(orjson.dumps, "orjson"),
                 BenchmarkFunction(ssrjson.dumps_to_bytes, "ssrjson"),
             ],
-            INDEXED_GROUPS[0],
+            INDEXED_GROUPS[1],
             "dumps_to_bytes",
         ),
         BenchmarkGroup(
@@ -257,7 +280,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                     lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson"
                 ),
             ],
-            INDEXED_GROUPS[0],
+            INDEXED_GROUPS[1],
             "dumps_to_bytes(indented2)",
         ),
         BenchmarkGroup(
@@ -300,29 +323,6 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             ],
             INDEXED_GROUPS[1],
             "dumps_to_bytes(cache,indented2)",
-        ),
-        BenchmarkGroup(
-            _benchmark_unicode_arg,
-            [
-                BenchmarkFunction(json.loads, "json"),
-                BenchmarkFunction(ujson.loads, "ujson"),
-                BenchmarkFunction(orjson.loads, "orjson"),
-                BenchmarkFunction(ssrjson.loads, "ssrjson"),
-            ],
-            INDEXED_GROUPS[1],
-            "loads(str)",
-            input_preprocessor=lambda x: x.decode("utf-8"),
-        ),
-        BenchmarkGroup(
-            _benchmark,
-            [
-                BenchmarkFunction(json.loads, "json"),
-                BenchmarkFunction(ujson.loads, "ujson"),
-                BenchmarkFunction(orjson.loads, "orjson"),
-                BenchmarkFunction(ssrjson.loads, "ssrjson"),
-            ],
-            INDEXED_GROUPS[1],
-            "loads(bytes)",
         ),
     )
 
