@@ -888,6 +888,7 @@ def run_benchmark(
     benchmark_libraries = _get_benchmark_libraries()
 
     result.categories = list(benchmark_libraries.keys())
+    result.filenames = [files[i].name for i in range(len(files))]
 
     for index_s in INDEXED_GROUPS:
         result.results[index_s] = dict()

@@ -81,12 +81,11 @@ class BenchmarkFinalResult(BenchmarkResultBase):
         ret = cls()
         ret.categories = j["categories"]
         ret.results = dict()
-        ret.filenames = set()
+        ret.filenames = j["filenames"]
         for k, v in j["results"].items():
             ret.results[k] = dict()
             for a, b in v.items():
                 ret.results[k][a] = BenchmarkResultPerFile.parse(b)
-                ret.filenames.add(a)
         return ret
 
     def dumps(self):
