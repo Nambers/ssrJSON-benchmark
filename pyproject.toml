@@ -25,7 +25,7 @@ classifiers = [
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
-    "ssrjson",
+    "ssrjson >= 0.0.8",
     "orjson",
     "ujson",
     "matplotlib",
