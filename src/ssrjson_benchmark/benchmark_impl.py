@@ -647,6 +647,46 @@ def _plot_relative_ops(categories: list[str], data: dict, doc_name: str) -> io.B
     return buf
 
 
+def _plot_distribution(ratio_distr: List[List[float]]):
+    lib_names = list(LIBRARIES_COLORS.keys())[1:]
+    fig, ax = plt.subplots(1, 1, figsize=(3 * len(lib_names), 4), tight_layout=True)
+
+    bplot = ax.boxplot(
+        ratio_distr,
+        vert=True,
+        patch_artist=True,
+        showfliers=False,
+    )
+
+    for median in bplot["medians"]:
+        median.set_color("red")
+        median.set_linewidth(2)
+
+    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
+    ax.text(
+        0.5,
+        1.02,
+        "Baseline (json)",
+        ha="left",
+        va="bottom",
+        fontsize=10,
+        color="gray",
+    )
+    ax.set_xticklabels(lib_names)
+    ax.set_ylabel("Speed Ratio to json")
+    ax.yaxis.set_major_formatter("{x:.1f}x")
+    ax.set_title("Speed Ratio Distribution per Library")
+
+    for patch, color in zip(bplot["boxes"], list(LIBRARIES_COLORS.values())[1:]):
+        patch.set_facecolor(color)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="svg", bbox_inches="tight")
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+
 def _draw_page_number(c: "canvas.Canvas", page_num: int):
     from reportlab.lib.pagesizes import A4
 
@@ -657,7 +697,10 @@ def _draw_page_number(c: "canvas.Canvas", page_num: int):
 
 
 def _generate_pdf_report(
-    figures: List[List[io.BytesIO]], header_text: str, output_pdf_path: str
+    figures: List[List[io.BytesIO]],
+    header_text: str,
+    output_pdf_path: str,
+    distribution_digest: List[List[float]],
 ) -> str:
     from reportlab.graphics import renderPDF
     from reportlab.lib.pagesizes import A4
@@ -732,6 +775,37 @@ def _generate_pdf_report(
 
     p = 0
 
+    # distribution plot
+    text_obj = c.beginText()
+    text_obj.setTextOrigin(40, y_pos)
+    text_obj.setFont(PDF_HEADING_FONT, 14)
+    text_obj.textLine("TL;DR")
+
+    c.drawText(text_obj)
+    c.bookmarkHorizontal("TL;DR", 0, y_pos + 20)
+    c.addOutlineEntry("TL;DR", "TL;DR", level=0)
+    y_pos -= 20
+
+    dist_svg_io = _plot_distribution(distribution_digest)
+    drawing = svg2rlg(dist_svg_io, font_map=font_map)
+
+    avail_w = width - 80
+    scale = avail_w / drawing.width
+    drawing.width *= scale
+    drawing.height *= scale
+    drawing.scale(scale, scale)
+
+    img_h = drawing.height
+    # no enough space
+    if y_pos - img_h - vertical_gap < bottom_margin:
+        _draw_page_number(c, p)
+        p += 1
+        c.showPage()
+        y_pos = height - bottom_margin
+
+    renderPDF.draw(drawing, c, 40, y_pos - img_h)
+    y_pos -= img_h + vertical_gap
+
     for i in range(len(INDEXED_GROUPS)):
         name = PRINT_INDEX_GROUPS[i]
         figs = figures[i]
@@ -805,6 +879,8 @@ def generate_report_pdf(result: BenchmarkFinalResult, file: str, out_dir: str = 
         for index_name in INDEXED_GROUPS
     ]
 
+    ratios = [[] for _ in range(len(LIBRARIES_COLORS) - 1)]
+
     for i in range(len(INDEXED_GROUPS)):
         for bench_filename in result.filenames:
             print(f"Processing {bench_filename} [{INDEXED_GROUPS[i]}](PDF)")
@@ -815,6 +891,14 @@ def generate_report_pdf(result: BenchmarkFinalResult, file: str, out_dir: str = 
                     bench_filename,
                 )
             )
+            for cat in cats[i]:
+                for lib_idx in range(len(LIBRARIES_COLORS) - 1):
+                    lib_name = list(LIBRARIES_COLORS.keys())[lib_idx + 1]
+                    ratios[lib_idx].append(
+                        result.results[INDEXED_GROUPS[i]][bench_filename][cat][
+                            lib_name
+                        ]["ratio"]
+                    )
 
     template = _fetch_header(
         file.removeprefix("benchmark_result_").removesuffix(".json")
@@ -823,6 +907,7 @@ def generate_report_pdf(result: BenchmarkFinalResult, file: str, out_dir: str = 
         figures,
         header_text=template,
         output_pdf_path=os.path.join(out_dir, report_name),
+        distribution_digest=ratios,
     )
     print(f"Report saved to {out_path}")
     return out_path
@@ -845,12 +930,14 @@ def generate_report_markdown(
     template = _fetch_header(
         file.removeprefix("benchmark_result_").removesuffix(".json")
     )
+    template += "\n\n## TL;DR\n\nTLDRIMGPLACEHOLDER\n\n"
 
     benchmark_groups = _get_benchmark_libraries()
     cats = [
         [a for a in result.categories if benchmark_groups[a].index_name == index_name]
         for index_name in INDEXED_GROUPS
     ]
+    ratios = [[] for _ in range(len(LIBRARIES_COLORS) - 1)]
 
     for i in range(len(INDEXED_GROUPS)):
         template += f"\n\n## {PRINT_INDEX_GROUPS[i]}\n\n"
@@ -869,9 +956,22 @@ def generate_report_markdown(
                         bench_filename,
                     ).getvalue()
                 )
+                for cat in cats[i]:
+                    for lib_idx in range(len(LIBRARIES_COLORS) - 1):
+                        lib_name = list(LIBRARIES_COLORS.keys())[lib_idx + 1]
+                        ratios[lib_idx].append(
+                            result.results[INDEXED_GROUPS[i]][bench_filename][cat][
+                                lib_name
+                            ]["ratio"]
+                        )
             # add svg
             template += f"![{bench_filename}_{INDEXED_GROUPS[i]}](./{bench_filename}_{INDEXED_GROUPS[i]}.svg)\n\n"
 
+    with open(os.path.join(report_folder, "ratio_distribution.svg"), "wb") as svg_file:
+        svg_file.write(_plot_distribution(ratios).getvalue())
+    template = template.replace(
+        "TLDRIMGPLACEHOLDER", "![ratio_distribution](./ratio_distribution.svg)"
+    )
     ret = os.path.join(report_folder, report_name)
     with open(ret, "w") as f:
         f.write(template)
