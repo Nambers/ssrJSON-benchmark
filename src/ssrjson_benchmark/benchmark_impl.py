@@ -858,6 +858,7 @@ def _fetch_header(rev) -> str:
         OS=f"{platform.system()} {platform.machine()} {platform.release()} {platform.version()}",
         PYTHON=sys.version,
         ORJSON_VER=orjson.__version__,
+        MSGSPEC_VER=msgspec.__version__,
         UJSON_VER=ujson.__version__,
         SIMD_FLAGS=ssrjson.get_current_features(),
         CHIPSET=_get_cpu_name(),

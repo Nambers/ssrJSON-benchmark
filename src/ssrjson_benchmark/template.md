@@ -3,6 +3,7 @@
 REV:            `{REV}`
 Python:         `{PYTHON}`
 Orjson:         `{ORJSON_VER}`
+MsgSpec:        `{MSGSPEC_VER}`
 Ujson:          `{UJSON_VER}`
 Generated time: {TIME}
 OS:             {OS}
