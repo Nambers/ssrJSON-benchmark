@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import orjson
 import ssrjson
 import ujson
+import msgspec
 
 from . import _ssrjson_benchmark
 from .result_types import BenchmarkFinalResult, BenchmarkResultPerFile
@@ -45,6 +46,7 @@ PDF_TEXT_FONT = "Courier"
 LIBRARIES_COLORS = {
     "json": "#74c476",
     "ujson": "#c994c7",
+    "msgspec": "#8856a7",
     "orjson": "#2c7fb8",
     "ssrjson": "#fd8d3c",
 }
@@ -191,6 +193,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             [
                 BenchmarkFunction(json.loads, "json"),
                 BenchmarkFunction(ujson.loads, "ujson"),
+                BenchmarkFunction(msgspec.json.decode, "msgspec"),
                 BenchmarkFunction(orjson.loads, "orjson"),
                 BenchmarkFunction(ssrjson.loads, "ssrjson"),
             ],
@@ -203,6 +206,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             [
                 BenchmarkFunction(json.loads, "json"),
                 BenchmarkFunction(ujson.loads, "ujson"),
+                BenchmarkFunction(msgspec.json.decode, "msgspec"),
                 BenchmarkFunction(orjson.loads, "orjson"),
                 BenchmarkFunction(ssrjson.loads, "ssrjson"),
             ],
@@ -215,6 +219,9 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 BenchmarkFunction(lambda x: json.dumps(x, ensure_ascii=False), "json"),
                 BenchmarkFunction(
                     lambda x: ujson.dumps(x, ensure_ascii=False), "ujson"
+                ),
+                BenchmarkFunction(
+                    lambda x: msgspec.json.encode(x).decode("utf-8"), "msgspec"
                 ),
                 BenchmarkFunction(lambda x: orjson.dumps(x).decode("utf-8"), "orjson"),
                 BenchmarkFunction(ssrjson.dumps, "ssrjson"),
@@ -230,6 +237,12 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 ),
                 BenchmarkFunction(
                     lambda x: ujson.dumps(x, indent=2, ensure_ascii=False), "ujson"
+                ),
+                BenchmarkFunction(
+                    lambda x: msgspec.json.format(
+                        msgspec.json.encode(x), indent=2
+                    ).decode("utf-8"),
+                    "msgspec",
                 ),
                 BenchmarkFunction(
                     lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2).decode(
@@ -251,6 +264,10 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 BenchmarkFunction(
                     lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
                     "ujson",
+                ),
+                BenchmarkFunction(
+                    msgspec.json.encode,
+                    "msgspec",
                 ),
                 BenchmarkFunction(orjson.dumps, "orjson"),
                 BenchmarkFunction(ssrjson.dumps_to_bytes, "ssrjson"),
@@ -274,6 +291,10 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                     "ujson",
                 ),
                 BenchmarkFunction(
+                    lambda x: msgspec.json.format(msgspec.json.encode(x), indent=2),
+                    "msgspec",
+                ),
+                BenchmarkFunction(
                     lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2), "orjson"
                 ),
                 BenchmarkFunction(
@@ -292,6 +313,10 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 BenchmarkFunction(
                     lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
                     "ujson",
+                ),
+                BenchmarkFunction(
+                    msgspec.json.encode,
+                    "msgspec",
                 ),
                 BenchmarkFunction(orjson.dumps, "orjson"),
                 BenchmarkFunction(ssrjson.dumps_to_bytes, "ssrjson"),
@@ -313,6 +338,10 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                         "utf-8"
                     ),
                     "ujson",
+                ),
+                BenchmarkFunction(
+                    lambda x: msgspec.json.format(msgspec.json.encode(x), indent=2),
+                    "msgspec",
                 ),
                 BenchmarkFunction(
                     lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2), "orjson"

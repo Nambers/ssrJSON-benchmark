@@ -27,6 +27,7 @@ license-files = ["LICENSE"]
 dependencies = [
     "ssrjson >= 0.0.8",
     "orjson",
+    "msgspec",
     "ujson",
     "matplotlib",
     "psutil; platform_machine == 'x86_64'",
