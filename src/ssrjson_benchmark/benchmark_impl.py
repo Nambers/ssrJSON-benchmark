@@ -726,7 +726,7 @@ def _generate_pdf_report(
     header_lines = header_text.count("\n") + 1
     header_height = header_lines * 14 + 10
     # subheading spacing = 30
-    y_pos = height - header_height - 30
+    y_pos = height - header_height - 40
     bottom_margin = 20
     vertical_gap = 20
 
