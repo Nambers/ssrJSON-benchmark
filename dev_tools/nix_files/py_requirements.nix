@@ -8,5 +8,6 @@ pypkgs: with pypkgs; [
   build
   pip
   ujson
+  msgspec
   ssrjson
 ]

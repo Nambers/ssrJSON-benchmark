@@ -151,6 +151,7 @@ def _benchmark_invalidate_dump_cache(
             _ssrjson_benchmark.run_object_benchmark(func, (benchmark_data[0],))
             #
             for i in range(1, cur_bin_size + 1):
+                # assert _recursive_check_cache(benchmark_data[i], False)
                 total += _ssrjson_benchmark.run_object_benchmark(
                     func, (benchmark_data[i],)
                 )
@@ -370,6 +371,32 @@ def _gc_prepare():
     if gc_was_enabled:
         gc.disable()
     return gc_was_enabled
+
+
+def _check_str_cache(s: str, want_cache: bool):
+    _, _, is_ascii, _ = _ssrjson_benchmark.inspect_pyunicode(s)
+    if is_ascii:
+        return True
+    return want_cache == _ssrjson_benchmark.pyunicode_has_utf8_cache(s)
+
+
+def _recursive_check_cache(obj, want_cache: bool):
+    if isinstance(obj, str):
+        return _check_str_cache(obj, want_cache)
+    if isinstance(obj, list):
+        for item in obj:
+            if not _recursive_check_cache(item, want_cache):
+                return False
+        return True
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if not _recursive_check_cache(key, want_cache):
+                return False
+            if not _recursive_check_cache(value, want_cache):
+                return False
+        return True
+    # other types
+    return True
 
 
 def _get_processed_size(func: Callable, input_data, is_dumps):

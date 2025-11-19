@@ -282,11 +282,38 @@ fail:;
     return NULL;
 }
 
+PyObject *pyunicode_has_utf8_cache(PyObject *self, PyObject *args, PyObject *kwargs) {
+    PyObject *unicode;
+    static const char *kwlist[] = {"unicode", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O", (char **)kwlist,
+                                     &unicode)) {
+        goto fail;
+    }
+    if (!PyUnicode_Check(unicode)) {
+        PyErr_SetString(PyExc_TypeError, "Argument must be unicode");
+        goto fail;
+    }
+    PyASCIIObject *a = (PyASCIIObject *)unicode;
+    if (a->state.ascii || !a->state.compact) {
+        Py_RETURN_FALSE;
+    }
+    PyCompactUnicodeObject *u = (PyCompactUnicodeObject *)unicode;
+    bool has_cache = (u->utf8 != NULL);
+    if (has_cache) {
+        Py_RETURN_TRUE;
+    } else {
+        Py_RETURN_FALSE;
+    }
+fail:;
+    return NULL;
+}
+
 static PyMethodDef ssrjson_benchmark_methods[] = {
         {"copy_unicode_list_invalidate_cache", (PyCFunction)copy_unicode_list_invalidate_cache, METH_VARARGS | METH_KEYWORDS, "Copy unicode list invalidate cache."},
         {"run_object_accumulate_benchmark", (PyCFunction)run_object_accumulate_benchmark, METH_VARARGS | METH_KEYWORDS, "Benchmark."},
         {"run_object_benchmark", (PyCFunction)run_object_benchmark, METH_VARARGS | METH_KEYWORDS, "Benchmark."},
         {"inspect_pyunicode", (PyCFunction)inspect_pyunicode, METH_VARARGS | METH_KEYWORDS, "Inspect PyUnicode."},
+        {"pyunicode_has_utf8_cache", (PyCFunction)pyunicode_has_utf8_cache, METH_VARARGS | METH_KEYWORDS, "Check if str has UTF-8 cache."},
         {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
