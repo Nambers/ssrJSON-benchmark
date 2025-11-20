@@ -10,3 +10,5 @@ OS:             {OS}
 SIMD flag:      {SIMD_FLAGS}
 Chipset:        {CHIPSET}
 Memory:         {MEM}
+Process(GB):    {PROCESS_MEM}
+PerBin(MB):     {PER_BIN_MEM}

@@ -45,7 +45,7 @@ def main():
     )
     parser.add_argument(
         "--bin-process-megabytes",
-        help="Maximum bytes to process per read for binary formats, default 32 (int)",
+        help="Maximum bytes to process per bin, default 32 (int)",
         required=False,
         default=32,
         type=int,

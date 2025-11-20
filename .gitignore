@@ -1,4 +1,4 @@
-benchmark_result*.json
+/benchmark_result_*
 /*.pdf
 /.nix-pyenv
 /.direnv

@@ -75,6 +75,8 @@ class BenchmarkFinalResult(BenchmarkResultBase):
     categories: list[str]
     results: dict[str, dict[str, BenchmarkResultPerFile]]
     filenames: set[str]
+    processbytesgb: float
+    perbinbytesmb: int
 
     @classmethod
     def parse(cls, j: dict):
