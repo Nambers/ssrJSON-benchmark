@@ -294,8 +294,13 @@ PyObject *pyunicode_has_utf8_cache(PyObject *self, PyObject *args, PyObject *kwa
         goto fail;
     }
     PyASCIIObject *a = (PyASCIIObject *)unicode;
-    if (a->state.ascii || !a->state.compact) {
-        Py_RETURN_FALSE;
+    if (!a->state.compact) {
+        PyErr_SetString(PyExc_TypeError, "Cannot check on non-compact unicode");
+        goto fail;
+    }
+    if (a->state.ascii) {
+        PyErr_SetString(PyExc_TypeError, "Unicode is ASCII");
+        goto fail;
     }
     PyCompactUnicodeObject *u = (PyCompactUnicodeObject *)unicode;
     bool has_cache = (u->utf8 != NULL);
