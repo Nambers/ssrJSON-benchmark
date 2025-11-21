@@ -84,6 +84,8 @@ class BenchmarkFinalResult(BenchmarkResultBase):
         ret.categories = j["categories"]
         ret.results = dict()
         ret.filenames = j["filenames"]
+        ret.processbytesgb = j["processbytesgb"]
+        ret.perbinbytesmb = j["perbinbytesmb"]
         for k, v in j["results"].items():
             ret.results[k] = dict()
             for a, b in v.items():
