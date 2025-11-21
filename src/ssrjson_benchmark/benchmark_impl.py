@@ -621,7 +621,11 @@ def _get_ratio_color(ratio: float) -> str:
         return "#8e44ad"  # purple (exceptional)
 
 
-def _plot_relative_ops(categories: list[str], data: dict, doc_name: str) -> io.BytesIO:
+def _plot_relative_ops(
+    categories: list[str], data: dict, doc_name: str, mask: list[bool] = None
+) -> io.BytesIO:
+    if mask is None:
+        mask = [True] * len(categories)
     libs = list(_LIBRARIES_COLORS.keys())
     colors = [_LIBRARIES_COLORS[n] for n in libs]
     n = len(categories)
@@ -639,7 +643,10 @@ def _plot_relative_ops(categories: list[str], data: dict, doc_name: str) -> io.B
 
     x_positions = [i * (bar_width + inner_pad) for i in range(len(libs))]
 
-    for ax, cat in zip(axs, categories):
+    for i, (ax, cat) in enumerate(zip(axs, categories)):
+        if not mask[i]:
+            ax.axis("off")
+            continue
         vals = [1.0] + [data[cat][name]["ratio"] for name in libs[1:]]
         gbps = (data[cat]["ssrjson_bytes_per_sec"]) / (1024**3)
 
@@ -949,6 +956,20 @@ def _fetch_header(rev, processbytesgb, perbinbytesmb) -> str:
     )
 
 
+def _fetch_cats_mask(
+    benchmark_groups: dict[str, BenchmarkGroup],
+    cats: list[list[str]],
+):
+    return [
+        [
+            benchmark_groups[a].index_name != _NAME_DUMPSTOBYTES
+            or not benchmark_groups[a].skip_when_ascii
+            for a in cats[i]
+        ]
+        for i in range(len(_INDEXED_GROUPS))
+    ]
+
+
 def generate_report_pdf(
     result: BenchmarkFinalResult, file: str, out_dir: str | None = None
 ):
@@ -972,29 +993,27 @@ def generate_report_pdf(
 
     ratios = [[] for _ in range(len(_LIBRARIES_COLORS) - 1)]
 
-    dumps_to_bytes_ascii_categories = [
-        a
-        for a in result.categories
-        if benchmark_groups[a].index_name == _NAME_DUMPSTOBYTES
-        and not benchmark_groups[a].skip_when_ascii
-    ]
+    dumps_to_bytes_ascii_mask = _fetch_cats_mask(benchmark_groups, cats)
 
     for i, indexed_group in enumerate(_INDEXED_GROUPS):
         for bench_filename in result.filenames:
             print(f"Processing {bench_filename} [{indexed_group}](PDF)")
             this_result = result.results[indexed_group][bench_filename]
-            if i == 1 and this_result.pyunicode_is_ascii:
-                this_cat = dumps_to_bytes_ascii_categories
+            if this_result.pyunicode_is_ascii:
+                mask = dumps_to_bytes_ascii_mask[i]
             else:
-                this_cat = cats[i]
+                mask = [True] * len(cats[i])
             figures[i].append(
                 _plot_relative_ops(
-                    this_cat,
+                    cats[i],
                     this_result,
                     bench_filename,
+                    mask,
                 )
             )
-            for cat in this_cat:
+            for j, cat in enumerate(cats[i]):
+                if not mask[j]:
+                    continue
                 for lib_idx in range(len(_LIBRARIES_COLORS) - 1):
                     lib_name = list(_LIBRARIES_COLORS.keys())[lib_idx + 1]
                     ratios[lib_idx].append(
@@ -1049,12 +1068,7 @@ def generate_report_markdown(
         [a for a in result.categories if benchmark_groups[a].index_name == index_name]
         for index_name in _INDEXED_GROUPS
     ]
-    dumps_to_bytes_ascii_categories = [
-        a
-        for a in result.categories
-        if benchmark_groups[a].index_name == _NAME_DUMPSTOBYTES
-        and not benchmark_groups[a].skip_when_ascii
-    ]
+    dumps_to_bytes_ascii_categories = _fetch_cats_mask(benchmark_groups, cats)
 
     ratios = [[] for _ in range(len(_LIBRARIES_COLORS) - 1)]
 
@@ -1067,17 +1081,20 @@ def generate_report_markdown(
                 "wb",
             ) as svg_file:
                 this_result = result.results[indexed_group][bench_filename]
-                if i == 1 and this_result.pyunicode_is_ascii:
-                    this_cat = dumps_to_bytes_ascii_categories
+                if this_result.pyunicode_is_ascii:
+                    mask = dumps_to_bytes_ascii_categories[i]
                 else:
-                    this_cat = cats[i]
+                    mask = [True] * len(cats[i])
                 write_value = _plot_relative_ops(
-                    this_cat,
+                    cats[i],
                     this_result,
                     bench_filename,
+                    mask,
                 ).getvalue()
                 svg_file.write(write_value)
-                for cat in this_cat:
+                for j, cat in enumerate(cats[i]):
+                    if not mask[j]:
+                        continue
                     for lib_idx in range(len(_LIBRARIES_COLORS) - 1):
                         lib_name = list(_LIBRARIES_COLORS.keys())[lib_idx + 1]
                         ratios[lib_idx].append(
