@@ -13,10 +13,6 @@ from typing import TYPE_CHECKING, Any, Callable, List
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import msgspec
-import orjson
-import ssrjson
-import ujson
 
 from . import _ssrjson_benchmark as internal
 from .result_types import BenchmarkFinalResult, BenchmarkResultPerFile
@@ -173,6 +169,11 @@ def _benchmark_with_dump_cache(
 
 
 def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
+    import msgspec
+    import orjson
+    import ssrjson
+    import ujson
+
     return (
         BenchmarkGroup(
             _benchmark_unicode_arg,
@@ -404,6 +405,8 @@ def ensure_utf8_cache(encodable):
     """
     # We use orjson.dumps,
     # which always create UTF-8 caches for all non-ASCII str.
+    import orjson
+
     orjson.dumps(encodable)
 
 
@@ -543,6 +546,8 @@ def _run_file_benchmark(
 
 
 def _get_ssrjson_rev():
+    import ssrjson
+
     return (
         getattr(ssrjson, "__version__", None) or getattr(ssrjson, "ssrjson").__version__
     )
@@ -937,6 +942,11 @@ def _generate_pdf_report(
 
 
 def _fetch_header(rev, processbytesgb, perbinbytesmb) -> str:
+    import msgspec
+    import orjson
+    import ssrjson
+    import ujson
+
     with open(os.path.join(_CUR_DIR, "template.md"), "r") as f:
         template = f.read()
     ssrjson_features = ssrjson.get_current_features()
@@ -1143,6 +1153,7 @@ def run_benchmark(
     Generate a JSON result of benchmark.
     Also returns a result object.
     """
+    import ssrjson
     # Set multiprocessing start method to fork, if Python version is 3.14+ on Unix
     # if sys.version_info >= (3, 14) and is_unix_except_macos():
     #     _set_multiprocessing_start_method()

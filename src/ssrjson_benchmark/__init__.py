@@ -1,9 +1,9 @@
+from . import _ssrjson_benchmark as internal
 from .benchmark_impl import (
-    generate_report_pdf,
     generate_report_markdown,
+    generate_report_pdf,
     run_benchmark,
 )
-from . import _ssrjson_benchmark as internal
 
 try:
     from importlib.metadata import version
