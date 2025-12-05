@@ -326,33 +326,26 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             skip_when_ascii=True,
         ),
         BenchmarkGroup(
-            _benchmark_with_dump_cache,
+            _benchmark_invalidate_dump_cache,
             [
                 BenchmarkFunction(
-                    lambda x: json.dumps(x, indent=2, ensure_ascii=False).encode(
-                        "utf-8"
-                    ),
-                    "json",
+                    lambda x: json.dumps(x, ensure_ascii=False).encode("utf-8"), "json"
                 ),
                 BenchmarkFunction(
-                    lambda x: ujson.dumps(x, indent=2, ensure_ascii=False).encode(
-                        "utf-8"
-                    ),
+                    lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
                     "ujson",
                 ),
                 BenchmarkFunction(
-                    lambda x: msgspec.json.format(msgspec.json.encode(x), indent=2),
+                    msgspec.json.encode,
                     "msgspec",
                 ),
+                BenchmarkFunction(orjson.dumps, "orjson"),
                 BenchmarkFunction(
-                    lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2), "orjson"
-                ),
-                BenchmarkFunction(
-                    lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson"
+                    lambda x: ssrjson.dumps_to_bytes(x, is_write_cache=True), "ssrjson"
                 ),
             ],
             _INDEXED_GROUPS[1],
-            "dumps to bytes (cached, indented2)",
+            "dumps to bytes (write cache)",
             is_dumps=True,
             skip_when_ascii=True,
         ),
