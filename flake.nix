@@ -39,7 +39,7 @@
       devShells = forAllSystems (
         pkgs:
         let
-          ssrjson = ssrjson_.packages.${pkgs.system}.ssrjson-pypackage-py313;
+          ssrjson = ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}.ssrjson-pypackage-py313;
         in
         {
           default = pkgs.callPackage ./dev_tools/nix_files/shell.nix {
@@ -51,7 +51,7 @@
       packages = forAllSystems (
         pkgs:
         let
-          ssrjson = ssrjson_.packages.${pkgs.system}.ssrjson-pypackage-py313;
+          ssrjson = ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}.ssrjson-pypackage-py313;
         in
         rec {
           default = pkgs.callPackage ./dev_tools/nix_files/package.nix { inherit ssrjson; };
