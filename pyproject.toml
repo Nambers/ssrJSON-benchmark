@@ -30,7 +30,7 @@ dependencies = [
     "msgspec",
     "ujson",
     "matplotlib",
-    "psutil; platform_machine == 'x86_64'",
+    "psutil",
     "svglib",
     "reportlab",
     "py-cpuinfo",

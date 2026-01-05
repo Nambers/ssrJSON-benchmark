@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, Callable, List
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
+import psutil
+
 from . import _ssrjson_benchmark as internal
 from .result_types import BenchmarkFinalResult, BenchmarkResultPerFile
 
@@ -582,19 +584,8 @@ def _get_cpu_name() -> str:
 
 
 def _get_mem_total() -> str:
-    mem_total: int = 0
-    if platform.system() == "Linux":
-        with open(file="/proc/meminfo", mode="r") as file:
-            mem_info_lines = file.readlines()
-            for line in mem_info_lines:
-                if "MemTotal" in line:
-                    mem_total = int(re.sub(pattern=r"[^0-9]", repl="", string=line))
-                    break
-    elif platform.system() == "Windows":
-        import psutil
-
-        mem_total = psutil.virtual_memory().total // 1024  # in KB
-    return f"{mem_total / (1024**2):.3f}GiB"
+    mem_total = psutil.virtual_memory().total // 1024 / (1024**2)
+    return f"{mem_total:.3f}GiB"
 
 
 def _plot_prepare():
@@ -951,7 +942,7 @@ def _fetch_header(rev, processbytesgb, perbinbytesmb) -> str:
         ORJSON_VER=orjson.__version__,
         MSGSPEC_VER=msgspec.__version__,
         UJSON_VER=ujson.__version__,
-        SIMD_FLAGS={k: ssrjson_features[k] for k in ("MultiLib", "SIMD")},
+        SIMD_FLAGS={k: ssrjson_features[k] for k in ("multi_lib", "simd")},
         CHIPSET=_get_cpu_name(),
         MEM=_get_mem_total(),
         PROCESS_MEM="{:.3f}GiB".format(processbytesgb),
@@ -1147,12 +1138,13 @@ def run_benchmark(
     Also returns a result object.
     """
     import ssrjson
+
     # Set multiprocessing start method to fork, if Python version is 3.14+ on Unix
     # if sys.version_info >= (3, 14) and is_unix_except_macos():
     #     _set_multiprocessing_start_method()
 
     # disable ssrJSON cache writing globally. Restore it after benchmark.
-    old_write_cache_status = ssrjson.get_current_features()["WriteUTF8Cache"]
+    old_write_cache_status = ssrjson.get_current_features()["write_utf8_cache"]
     ssrjson.write_utf8_cache(False)
     try:
         file = _get_real_output_file_name()
