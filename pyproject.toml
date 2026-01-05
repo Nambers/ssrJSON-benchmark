@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ssrjson-benchmark"
-version = "0.0.9"
+version = "0.0.10"
 authors = [
     { name = "Eritque Arcus", email = "eritque-arcus@ikuyo.dev" },
     { name = "Antares", email = "antares0982@gmail.com" },
@@ -25,7 +25,7 @@ classifiers = [
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
-    "ssrjson >= 0.0.9",
+    "ssrjson >= 0.0.10",
     "orjson",
     "msgspec",
     "ujson",
