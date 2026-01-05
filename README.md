@@ -29,7 +29,9 @@ python -m ssrjson_benchmark
 
 ## Benchmark options
 
-```
+Generate report with default config may take roughly 10 minutes. Additionally, we highly recommand to generate report with `--process-gigabytes 1 --bin-process-megabytes 32` in large memory modern computer to get more objective and accurate result (will take around 1 hour).
+
+```bash
 usage: python -m ssrjson_benchmark [-h] [-f FILE] [-d IN_DIR] [-m] [--no-pdf] [--process-gigabytes PROCESS_GIGABYTES]
                    [--bin-process-megabytes BIN_PROCESS_MEGABYTES] [--out-dir OUT_DIR]
 
@@ -40,9 +42,9 @@ options:
   -m, --markdown        Generate Markdown report
   --no-pdf              Don't generate PDF report
   --process-gigabytes PROCESS_GIGABYTES
-                        Total gigabytes to process per test case, default 0.1 (float)
+                        Total gigabytes to process per test case, default 0.25 (float)
   --bin-process-megabytes BIN_PROCESS_MEGABYTES
-                        Maximum bytes to process per bin, default 32 (int)
+                        Maximum megabytes to process per bin, default 8 (int)
   --out-dir OUT_DIR     Output directory for reports
 ```
 
@@ -55,4 +57,3 @@ options:
   * Test with UTF-8 cache is skipped when the whole JSON object is ASCII.
 * The performance of JSON encoding is primarily constrained by the speed of writing to the buffer, whereas decoding performance is mainly limited by the frequent invocation of CPython interfaces for object creation. During decoding, both ssrJSON and orjson employ short key caching to reduce the number of object creations, and this caching mechanism is global in both libraries. As a result, decoding benchmark tests may not accurately reflect the conditions encountered in real-world production environments.
 * The files simple_object.json and simple_object_zh.json do not represent real-world data; they are used to compare the performance of the fast path. Therefore, the benchmark results from these test cases should not be interpreted as indicative of actual performance in production environment.
-

@@ -52,16 +52,16 @@ def main():
     )
     parser.add_argument(
         "--process-gigabytes",
-        help="Total gigabytes to process per test case, default 0.1 (float)",
+        help="Total gigabytes to process per test case, default 0.25 (float)",
         required=False,
-        default=0.1,
+        default=0.25,
         type=float,
     )
     parser.add_argument(
         "--bin-process-megabytes",
-        help="Maximum bytes to process per bin, default 32 (int)",
+        help="Maximum bytes to process per bin, default 8 (int)",
         required=False,
-        default=32,
+        default=8,
         type=int,
     )
     parser.add_argument(
