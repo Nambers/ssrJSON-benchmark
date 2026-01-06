@@ -295,7 +295,7 @@ PyObject *pyunicode_has_utf8_cache(PyObject *self, PyObject *args, PyObject *kwa
     }
     PyASCIIObject *a = (PyASCIIObject *)unicode;
     if (!a->state.compact) {
-        PyErr_SetString(PyExc_TypeError, "Cannot check on non-compact unicode");
+        PyErr_SetString(PyExc_TypeError, "Cannot check non-compact unicode");
         goto fail;
     }
     if (a->state.ascii) {
