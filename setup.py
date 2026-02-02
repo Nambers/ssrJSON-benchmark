@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import subprocess
 
@@ -20,18 +21,28 @@ def run_check(cmd):
         print(f"error: {e}")
         raise
 
+
 class CMakeBuild(build_ext):
     def run(self):
         build_dir = os.path.abspath("build")
         if not os.path.exists(build_dir):
             os.makedirs(build_dir)
-        run_check([
-            "cmake",
-            "-DCMAKE_BUILD_TYPE=Release",
-            ".",
-            "-B",
-            "build",
-        ])
+        run_check(
+            [
+                "cmake",
+                "-DCMAKE_BUILD_TYPE=Release",
+                ".",
+                "-B",
+                "build",
+            ]
+            + (
+                ["-DBUILD_FREE_THREADING=on"]
+                if sys.version_info >= (3, 14)
+                and hasattr(sys, "_is_gil_enabled")
+                and not sys._is_gil_enabled()
+                else []
+            )
+        )
 
         if os.name == "nt":
             build_cmd = ["cmake", "--build", "build", "--config", "Release"]
