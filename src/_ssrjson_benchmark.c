@@ -322,13 +322,20 @@ static PyMethodDef ssrjson_benchmark_methods[] = {
         {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
+static PyModuleDef_Slot ssrjson_module_slots[] = {
+#if PY_MINOR_VERSION >= 14 && !defined(Py_GIL_DISABLED)
+        {Py_mod_gil, Py_MOD_GIL_NOT_USED},
+#endif
+        {0, NULL} /* Sentinel */
+};
+
 static struct PyModuleDef moduledef = {
         PyModuleDef_HEAD_INIT,
         "_ssrjson_benchmark",      /* m_name */
         0,                         /* m_doc */
         0,                         /* m_size */
         ssrjson_benchmark_methods, /* m_methods */
-        NULL,                      /* m_slots */
+        ssrjson_module_slots,      /* m_slots */
         NULL,                      /* m_traverse */
         NULL,                      /* m_clear */
         NULL                       /* m_free */

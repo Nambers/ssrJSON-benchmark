@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 # ------------------------------------------------------------------------------
 # Build Options for tests and docs
 
+option(BUILD_FREE_THREADING "Build with free threading support" OFF)
+
 # ------------------------------------------------------------------------------
 # Project Config
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -47,6 +49,9 @@ target_link_libraries(commonBuild INTERFACE ${Python3_LIBRARIES})
 target_include_directories(commonBuild INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src> ${Python3_INCLUDE_DIRS})
 if(MSVC)
     target_compile_options(commonBuild INTERFACE /FAcs)
+endif()
+if(BUILD_FREE_THREADING)
+  target_compile_definitions(commonBuild INTERFACE Py_GIL_DISABLED=1)
 endif()
 
 message("CMAKE_C_COMPILER_ID = ${CMAKE_C_COMPILER_ID}")
