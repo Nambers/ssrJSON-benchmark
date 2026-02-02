@@ -330,28 +330,13 @@ static PyModuleDef_Slot ssrjson_module_slots[] = {
 };
 
 static struct PyModuleDef moduledef = {
-        PyModuleDef_HEAD_INIT,
-        "_ssrjson_benchmark",      /* m_name */
-        0,                         /* m_doc */
-        0,                         /* m_size */
-        ssrjson_benchmark_methods, /* m_methods */
-        ssrjson_module_slots,      /* m_slots */
-        NULL,                      /* m_traverse */
-        NULL,                      /* m_clear */
-        NULL                       /* m_free */
+        .m_base = PyModuleDef_HEAD_INIT,
+        .m_name = "_ssrjson_benchmark",
+        .m_size = 0,
+        .m_methods = ssrjson_benchmark_methods,
+        .m_slots = ssrjson_module_slots,
 };
 
 PyMODINIT_FUNC PyInit__ssrjson_benchmark(void) {
-    PyObject *module;
-    // check if module already exists
-    if ((module = PyState_FindModule(&moduledef)) != NULL) {
-        Py_INCREF(module);
-        return module;
-    }
-    // create module
-    module = PyModule_Create(&moduledef);
-    if (module == NULL) {
-        return NULL;
-    }
-    return module;
+    return PyModuleDef_Init(&moduledef);
 }
