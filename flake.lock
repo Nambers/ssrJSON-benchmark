@@ -38,7 +38,7 @@
         "ssrjson_": "ssrjson_"
       }
     },
-    "ssrjson_": {
+    "ssrjson-nix-dev": {
       "inputs": {
         "nixpkgs": [
           "nixpkgs"
@@ -46,11 +46,30 @@
         "nixpkgs-legacy": "nixpkgs-legacy"
       },
       "locked": {
-        "lastModified": 1767627431,
-        "narHash": "sha256-Fwg+htOOOBrTinbyuqMQ7DiqagcRO8JjnOSRfvbVgGg=",
+        "lastModified": 1768065703,
+        "narHash": "sha256-SDnBlEwTXZkWSJkFOqoPcg4t84mikfa4AGv6aSZYFcc=",
+        "owner": "Antares0982",
+        "repo": "ssrjson-nix-dev",
+        "rev": "4716d588a221820c61b24d5bd976b8d5820b462b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Antares0982",
+        "ref": "main",
+        "repo": "ssrjson-nix-dev",
+        "type": "github"
+      }
+    },
+    "ssrjson_": {
+      "inputs": {
+        "ssrjson-nix-dev": "ssrjson-nix-dev"
+      },
+      "locked": {
+        "lastModified": 1769873694,
+        "narHash": "sha256-6MVOh7fI4D8NIM7IKOGVTxytss4RH+isHAlqf+Pb86A=",
         "owner": "antares0982",
         "repo": "ssrjson",
-        "rev": "49b74193bb6c962fd2ab06a1334f1cb3582ad0b3",
+        "rev": "8b0f387842cc61cfd51b6adc8eb081d6181ad981",
         "type": "github"
       },
       "original": {

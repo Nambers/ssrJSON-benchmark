@@ -26,8 +26,6 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "ssrjson >= 0.0.10",
-    "orjson",
-    "msgspec",
     "ujson",
     "matplotlib",
     "psutil",

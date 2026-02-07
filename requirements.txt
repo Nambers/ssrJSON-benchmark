@@ -1,7 +1,5 @@
 matplotlib
-orjson
 ujson
-msgspec
 reportlab
 svglib
 py-cpuinfo
