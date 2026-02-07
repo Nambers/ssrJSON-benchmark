@@ -46,11 +46,11 @@
         "nixpkgs-legacy": "nixpkgs-legacy"
       },
       "locked": {
-        "lastModified": 1768065703,
-        "narHash": "sha256-SDnBlEwTXZkWSJkFOqoPcg4t84mikfa4AGv6aSZYFcc=",
+        "lastModified": 1770467352,
+        "narHash": "sha256-dSyk2euqfdrz0GPmBZ8qHdVFqVgMAxbA27PlBA2sUfM=",
         "owner": "Antares0982",
         "repo": "ssrjson-nix-dev",
-        "rev": "4716d588a221820c61b24d5bd976b8d5820b462b",
+        "rev": "74a883cac4a24bd52732fb66b501c050ffab704a",
         "type": "github"
       },
       "original": {
@@ -65,15 +65,16 @@
         "ssrjson-nix-dev": "ssrjson-nix-dev"
       },
       "locked": {
-        "lastModified": 1769873694,
-        "narHash": "sha256-6MVOh7fI4D8NIM7IKOGVTxytss4RH+isHAlqf+Pb86A=",
+        "lastModified": 1770480280,
+        "narHash": "sha256-V62cztXC4f2vqRZyGWY4gcWjr8G6VwDY2nzKxGxL/RA=",
         "owner": "antares0982",
         "repo": "ssrjson",
-        "rev": "8b0f387842cc61cfd51b6adc8eb081d6181ad981",
+        "rev": "f9a316c68fb94455d656730f3a89db4c56281741",
         "type": "github"
       },
       "original": {
         "owner": "antares0982",
+        "ref": "dev-freethreading",
         "repo": "ssrjson",
         "type": "github"
       }

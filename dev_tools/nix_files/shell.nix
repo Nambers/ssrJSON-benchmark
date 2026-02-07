@@ -12,7 +12,7 @@ let
   # define the nix-pyenv directory
   nix-pyenv-directory = ".nix-pyenv";
   # define version
-  usingPython = pkgs.python314;
+  usingPython = pkgs.python314FreeThreading;
   # import required python packages
   requiredPythonPackages = callPackage ./py_requirements.nix { inherit ssrjson; };
   # create python environment

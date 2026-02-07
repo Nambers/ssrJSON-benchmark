@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     ssrjson_ = {
-      url = "github:antares0982/ssrjson";
+      url = "github:antares0982/ssrjson/dev-freethreading";
       inputs.ssrjson-nix-dev.inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -39,7 +39,7 @@
       devShells = forAllSystems (
         pkgs:
         let
-          ssrjson = ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}.ssrjson-pypackage-py314;
+          ssrjson = ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}.ssrjson-pypackage-py314t;
         in
         {
           default = pkgs.callPackage ./dev_tools/nix_files/shell.nix {
@@ -51,7 +51,7 @@
       packages = forAllSystems (
         pkgs:
         let
-          ssrjson = ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}.ssrjson-pypackage-py314;
+          ssrjson = ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}.ssrjson-pypackage-py314t;
         in
         rec {
           default = pkgs.callPackage ./dev_tools/nix_files/package.nix { inherit ssrjson; };
