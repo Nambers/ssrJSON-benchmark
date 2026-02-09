@@ -32,13 +32,13 @@ dependencies = [
     "psutil",
     "py-cpuinfo",
 ]
-optional-dependencies = { 
-    "visual": [
-        "matplotlib",
-        "svglib",
-        "reportlab",
-    ],
-}
+
+[project.optional-dependencies]
+visual = [
+    "matplotlib",
+    "svglib",
+    "reportlab",
+]
 
 [project.urls]
 Homepage = "https://github.com/Nambers/ssrJSON-benchmark"
