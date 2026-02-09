@@ -29,12 +29,16 @@ dependencies = [
     "orjson",
     "msgspec",
     "ujson",
-    "matplotlib",
     "psutil",
-    "svglib",
-    "reportlab",
     "py-cpuinfo",
 ]
+optional-dependencies = { 
+    "visual": [
+        "matplotlib",
+        "svglib",
+        "reportlab",
+    ],
+}
 
 [project.urls]
 Homepage = "https://github.com/Nambers/ssrJSON-benchmark"

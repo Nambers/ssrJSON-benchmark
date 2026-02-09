@@ -11,9 +11,6 @@ import time
 from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any, Callable, List
 
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-
 import psutil
 
 from . import _ssrjson_benchmark as internal
@@ -589,6 +586,8 @@ def _get_mem_total() -> str:
 
 
 def _plot_prepare():
+    import matplotlib as mpl
+
     mpl.use("Agg")
     mpl.rcParams["svg.fonttype"] = "none"
 
@@ -613,6 +612,8 @@ def _get_ratio_color(ratio: float) -> str:
 def _plot_relative_ops(
     categories: list[str], data: dict, doc_name: str, mask: list[bool] = None
 ) -> io.BytesIO:
+    import matplotlib.pyplot as plt
+
     if mask is None:
         mask = [True] * len(categories)
     libs = list(_LIBRARIES_COLORS.keys())

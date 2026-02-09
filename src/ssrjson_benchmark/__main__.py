@@ -1,15 +1,17 @@
+from importlib.util import find_spec
 import sys
 
 
+def _check_visual_deps():
+    libs = ["matplotlib", "svglib", "reportlab"]
+    for lib in libs:
+        if find_spec(lib) is None:
+            raise ImportError(
+                f"Library {lib} is required for visual report generation. Please install it by `pip install ssrjson_benchmark[visual]` or `pip install {" ".join(libs)}`."
+            )
+
+
 def main():
-    try:
-        import msgspec
-        import orjson
-        import ssrjson
-        import ujson
-    except ImportError:
-        print("Please install required packages: msgspec, orjson, ssrjson, ujson")
-        return 1
     import argparse
     import json
     import os
@@ -70,6 +72,13 @@ def main():
         required=False,
         default=os.getcwd(),
     )
+    parser.add_argument(
+        "-t",
+        "--text-only",
+        help="Only collect benchmark into JSON file.",
+        required=False,
+        action="store_true",
+    )
     args = parser.parse_args()
     skip_tests = bool(args.file)
     if skip_tests and args.no_pdf and not args.markdown:
@@ -102,10 +111,12 @@ def main():
         )
         file = file.split("/")[-1]
 
-    if args.markdown:
-        generate_report_markdown(result, file, args.out_dir)
-    if not args.no_pdf:
-        generate_report_pdf(result, file, args.out_dir)
+    if not args.text_only:
+        _check_visual_deps()
+        if args.markdown:
+            generate_report_markdown(result, file, args.out_dir)
+        if not args.no_pdf:
+            generate_report_pdf(result, file, args.out_dir)
     return 0
 
 
