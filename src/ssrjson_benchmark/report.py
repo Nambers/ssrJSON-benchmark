@@ -261,15 +261,29 @@ def plot_benchmark_svg(
                     linewidth=0.8,
                 )
 
+            # Ratio label
+            label_y = val + max(err, 0) + 0.05
             ax.text(
                 xi,
-                val + max(err, 0) + 0.05,
+                label_y,
                 f"{val:.2f}x",
                 ha="center",
                 va="bottom",
                 fontsize=config.ratio_fontsize,
                 color=_get_ratio_color(val),
             )
+            # CV percentage (±X.X%) below the ratio label
+            if config.show_std_dev and err > 0 and val > 0:
+                cv_pct = err / val * 100
+                ax.text(
+                    xi,
+                    label_y - 0.02,
+                    f"\u00b1{cv_pct:.1f}%",
+                    ha="center",
+                    va="top",
+                    fontsize=config.ratio_fontsize - 2,
+                    color="#888888",
+                )
 
         if "ssrjson" in libs and gbps > 0:
             ssrjson_index = libs.index("ssrjson")
