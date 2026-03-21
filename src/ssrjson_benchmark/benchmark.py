@@ -665,6 +665,7 @@ def _run_benchmark(
         cur_lib = BenchmarkResultPerFileTargetLib()
         cur_lib.speed = total
         cur_lib.times = times
+        cur_lib.repeat_count = len(times)
         cur_lib.std_dev = compute_std_dev(times, total)
         cur_target[benchmark_target.library_name] = cur_lib
 

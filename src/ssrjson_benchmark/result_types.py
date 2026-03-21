@@ -6,29 +6,30 @@ from typing import Any
 class BenchmarkResultPerFileTargetLib:
     """Per-library benchmark result within a benchmark group for a file."""
 
-    __slots__ = ("speed", "ratio", "std_dev", "times")
+    __slots__ = ("speed", "ratio", "std_dev", "repeat_count", "times")
 
     def __init__(
         self,
         speed: int = 0,
         ratio: float = 0.0,
         std_dev: float = 0.0,
+        repeat_count: int = 0,
         times: list[int] | None = None,
     ):
         self.speed = speed
         self.ratio = ratio
         self.std_dev = std_dev
+        self.repeat_count = repeat_count
+        # times is kept in memory for std_dev computation but not serialized
         self.times = times if times is not None else []
 
     def to_dict(self) -> dict:
-        d: dict[str, Any] = {
+        return {
             "speed": self.speed,
             "ratio": self.ratio,
             "std_dev": self.std_dev,
+            "repeat_count": self.repeat_count,
         }
-        if self.times:
-            d["times"] = self.times
-        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "BenchmarkResultPerFileTargetLib":
@@ -36,7 +37,7 @@ class BenchmarkResultPerFileTargetLib:
             speed=d.get("speed", 0),
             ratio=d.get("ratio", 0.0),
             std_dev=d.get("std_dev", 0.0),
-            times=d.get("times", []),
+            repeat_count=d.get("repeat_count", 0),
         )
 
 

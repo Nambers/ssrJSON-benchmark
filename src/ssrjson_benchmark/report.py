@@ -228,16 +228,17 @@ def plot_benchmark_svg(
         gbps = ssrjson_bps / (1024**3) if ssrjson_bps else 0.0
 
         # Compute ratio std dev for display (CV * ratio)
+        # CV = std_dev / mean_per_iteration = std_dev * repeat_count / speed
         ratio_errors = []
         for j_idx, name in enumerate(libs):
             if name in target and not isinstance(target, dict):
                 lib_result = target[name]
-                if lib_result.speed > 0 and lib_result.std_dev > 0:
-                    cv = (
-                        lib_result.std_dev / (lib_result.speed / len(lib_result.times))
-                        if lib_result.times
-                        else 0
-                    )
+                if (
+                    lib_result.speed > 0
+                    and lib_result.std_dev > 0
+                    and lib_result.repeat_count > 0
+                ):
+                    cv = lib_result.std_dev * lib_result.repeat_count / lib_result.speed
                     ratio_errors.append(vals[j_idx] * cv)
                 else:
                     ratio_errors.append(0)
