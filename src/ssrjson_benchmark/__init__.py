@@ -1,9 +1,6 @@
 from . import _ssrjson_benchmark as internal
-from .benchmark_impl import (
-    generate_report_markdown,
-    generate_report_pdf,
-    run_benchmark,
-)
+from .benchmark import run_benchmark, parse_file_result
+from .report import generate_report_markdown, generate_report_pdf
 
 try:
     from importlib.metadata import version
@@ -17,5 +14,6 @@ __all__ = [
     "generate_report_pdf",
     "internal",
     "run_benchmark",
+    "parse_file_result",
     "__version__",
 ]

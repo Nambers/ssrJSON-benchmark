@@ -7,7 +7,9 @@ def _check_visual_deps():
     for lib in libs:
         if find_spec(lib) is None:
             raise ImportError(
-                f"Library {lib} is required for visual report generation. Please install it by `pip install ssrjson_benchmark[visual]` or `pip install {" ".join(libs)}`."
+                f"Library {lib} is required for visual report generation. "
+                f"Please install it by `pip install ssrjson_benchmark[visual]` "
+                f"or `pip install {' '.join(libs)}`."
             )
 
 
@@ -17,12 +19,7 @@ def main():
     import os
     import pathlib
 
-    from .benchmark_impl import (
-        generate_report_markdown,
-        generate_report_pdf,
-        parse_file_result,
-        run_benchmark,
-    )
+    from .benchmark import parse_file_result, run_benchmark
 
     parser = argparse.ArgumentParser()
 
@@ -113,6 +110,8 @@ def main():
 
     if not args.text_only:
         _check_visual_deps()
+        from .report import generate_report_markdown, generate_report_pdf
+
         if args.markdown:
             generate_report_markdown(result, file, args.out_dir)
         if not args.no_pdf:

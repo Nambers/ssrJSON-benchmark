@@ -164,9 +164,10 @@ PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
     PyObject *callable;
     usize repeat;
     PyObject *call_args;
-    static const char *kwlist[] = {"func", "repeat", "args", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKO", (char **)kwlist,
-                                     &callable, &repeat, &call_args)) {
+    PyObject *times_list = NULL;
+    static const char *kwlist[] = {"func", "repeat", "args", "times_list", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKO|O", (char **)kwlist,
+                                     &callable, &repeat, &call_args, &times_list)) {
         PyErr_SetString(PyExc_TypeError, "Invalid argument");
         goto fail;
     }
@@ -178,6 +179,18 @@ PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
     if (!PyTuple_Check(call_args)) {
         PyErr_SetString(PyExc_TypeError, "Third argument must be tuple");
         goto fail;
+    }
+    if (times_list != NULL && times_list != Py_None) {
+        if (!PyList_Check(times_list)) {
+            PyErr_SetString(PyExc_TypeError, "times_list must be a list");
+            goto fail;
+        }
+        if ((usize)PyList_GET_SIZE(times_list) < repeat) {
+            PyErr_SetString(PyExc_ValueError, "times_list is too small for the given repeat count");
+            goto fail;
+        }
+    } else {
+        times_list = NULL;
     }
     //
     usize total = 0;
@@ -193,7 +206,14 @@ PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
         } else {
             Py_DECREF(result);
         }
-        total += end - start;
+        usize elapsed = end - start;
+        total += elapsed;
+        if (times_list) {
+            PyObject *elapsed_obj = PyLong_FromUnsignedLongLong(elapsed);
+            if (!elapsed_obj) goto fail;
+            Py_DECREF(PyList_GET_ITEM(times_list, i));
+            PyList_SET_ITEM(times_list, i, elapsed_obj);
+        }
     }
     return PyLong_FromUnsignedLongLong(total);
 fail:;
