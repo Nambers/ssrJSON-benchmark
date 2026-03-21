@@ -25,17 +25,18 @@ _SSRJSON_COLOR = "#fd8d3c"
 # from bottom-to-top (i.e. reversed non-ssrjson library list).
 # One additional color is appended for when more libraries are present.
 _OTHER_COLORS_PALETTE = [
-    "#2c7fb8",   # blue   (was orjson)
-    "#8856a7",   # purple (was msgspec)
-    "#c994c7",   # light purple (was ujson)
-    "#74c476",   # green  (was json)
-    "#41b6c4",   # teal   (new extra color)
+    "#2c7fb8",  # blue   (was orjson)
+    "#8856a7",  # purple (was msgspec)
+    "#c994c7",  # light purple (was ujson)
+    "#74c476",  # green  (was json)
+    "#41b6c4",  # teal   (new extra color)
 ]
 
 
 # ---------------------------------------------------------------------------
 # Dynamic color assignment
 # ---------------------------------------------------------------------------
+
 
 def assign_colors(libraries: list[str]) -> dict[str, str]:
     """Assign colors to libraries dynamically.
@@ -64,6 +65,7 @@ def assign_colors(libraries: list[str]) -> dict[str, str]:
 # Plot config
 # ---------------------------------------------------------------------------
 
+
 class PlotConfig:
     def __init__(
         self,
@@ -88,8 +90,10 @@ class PlotConfig:
 # Plot helpers
 # ---------------------------------------------------------------------------
 
+
 def _plot_prepare():
     import matplotlib as mpl
+
     mpl.use("Agg")
     mpl.rcParams["svg.fonttype"] = "none"
 
@@ -114,6 +118,7 @@ def _get_ratio_color(ratio: float) -> str:
 # ---------------------------------------------------------------------------
 # Single benchmark SVG plot
 # ---------------------------------------------------------------------------
+
 
 def plot_benchmark_svg(
     categories: list[str],
@@ -147,7 +152,11 @@ def plot_benchmark_svg(
     lib_colors = {}
     for i, cat in enumerate(categories):
         if mask[i] and cat in data:
-            target = data[cat] if isinstance(data[cat], BenchmarkResultPerFileTarget) else data[cat]
+            target = (
+                data[cat]
+                if isinstance(data[cat], BenchmarkResultPerFileTarget)
+                else data[cat]
+            )
             libs = target.libraries
             lib_colors = assign_colors(libs)
             break
@@ -167,7 +176,8 @@ def plot_benchmark_svg(
     bar_width = config.bar_width
 
     fig, axs = plt.subplots(
-        1, n,
+        1,
+        n,
         figsize=(config.fig_width_per_cat * n, config.fig_height),
         sharey=False,
         tight_layout=True,
@@ -223,7 +233,11 @@ def plot_benchmark_svg(
             if name in target and not isinstance(target, dict):
                 lib_result = target[name]
                 if lib_result.speed > 0 and lib_result.std_dev > 0:
-                    cv = lib_result.std_dev / (lib_result.speed / len(lib_result.times)) if lib_result.times else 0
+                    cv = (
+                        lib_result.std_dev / (lib_result.speed / len(lib_result.times))
+                        if lib_result.times
+                        else 0
+                    )
                     ratio_errors.append(vals[j_idx] * cv)
                 else:
                     ratio_errors.append(0)
@@ -236,14 +250,22 @@ def plot_benchmark_svg(
             # Show std dev whisker if enabled and significant
             if config.show_std_dev and err > 0:
                 ax.errorbar(
-                    xi, val, yerr=err,
-                    fmt="none", ecolor="#333333", capsize=2, capthick=0.8, linewidth=0.8,
+                    xi,
+                    val,
+                    yerr=err,
+                    fmt="none",
+                    ecolor="#333333",
+                    capsize=2,
+                    capthick=0.8,
+                    linewidth=0.8,
                 )
 
             ax.text(
-                xi, val + max(err, 0) + 0.05,
+                xi,
+                val + max(err, 0) + 0.05,
                 f"{val:.2f}x",
-                ha="center", va="bottom",
+                ha="center",
+                va="bottom",
                 fontsize=config.ratio_fontsize,
                 color=_get_ratio_color(val),
             )
@@ -254,21 +276,24 @@ def plot_benchmark_svg(
                 x_positions[ssrjson_index],
                 vals[ssrjson_index] / 2,
                 f"{gbps:.2f} GB/s",
-                ha="center", va="center",
+                ha="center",
+                va="center",
                 fontsize=config.gbps_fontsize,
-                color="#2c3e50", fontweight="bold",
+                color="#2c3e50",
+                fontweight="bold",
             )
 
         ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
-        max_val_with_err = max(
-            v + e for v, e in zip(vals, ratio_errors)
-        )
+        max_val_with_err = max(v + e for v, e in zip(vals, ratio_errors))
         ax.set_ylim(0, max(max_val_with_err, 1.0) * 1.1)
 
         ax.tick_params(
-            axis="both", which="both",
-            left=False, bottom=False,
-            labelleft=False, labelbottom=False,
+            axis="both",
+            which="both",
+            left=False,
+            bottom=False,
+            labelleft=False,
+            labelbottom=False,
         )
         for spine in ("left", "top", "right"):
             ax.spines[spine].set_visible(False)
@@ -296,10 +321,14 @@ def plot_benchmark_svg(
     )
 
     fig.text(
-        0.5, 0,
+        0.5,
+        0,
         "Higher is better",
-        ha="center", va="bottom",
-        fontsize=8, style="italic", color="#555555",
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        style="italic",
+        color="#555555",
     )
 
     buf = io.BytesIO()
@@ -312,6 +341,7 @@ def plot_benchmark_svg(
 # ---------------------------------------------------------------------------
 # Distribution plot
 # ---------------------------------------------------------------------------
+
 
 def plot_distribution_svg(
     ratio_distr: list[list[float]],
@@ -340,10 +370,13 @@ def plot_distribution_svg(
 
     ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
     ax.text(
-        0.5, 1.02,
+        0.5,
+        1.02,
         "Baseline (json)",
-        ha="left", va="bottom",
-        fontsize=10, color="gray",
+        ha="left",
+        va="bottom",
+        fontsize=10,
+        color="gray",
     )
     ax.set_xticklabels(lib_names)
     ax.set_ylabel("Speed Ratio to json")
@@ -363,6 +396,7 @@ def plot_distribution_svg(
 # ---------------------------------------------------------------------------
 # Helpers for report layout
 # ---------------------------------------------------------------------------
+
 
 def _get_cats_and_masks(result: BenchmarkFinalResult):
     """Compute categories per index group and ASCII masks."""
@@ -426,8 +460,10 @@ def _collect_ratios(result: BenchmarkFinalResult, cats, masks):
 # PDF report
 # ---------------------------------------------------------------------------
 
+
 def _draw_page_number(c: "canvas.Canvas", page_num: int):
     from reportlab.lib.pagesizes import A4
+
     width, _ = A4
     c.setFont("Helvetica-Oblique", 8)
     c.setFillColorRGB(0.5, 0.5, 0.5)
@@ -447,6 +483,7 @@ def _generate_pdf_report(
 
     try:
         from svglib.fonts import FontMap
+
         font_map = FontMap()
         font_map.register_default_fonts()
         font_map.register_font("Helvetica", weight="700", rlgFontName="Helvetica-Bold")
@@ -486,7 +523,9 @@ def _generate_pdf_report(
     text = "This report was generated by https://github.com/Nambers/ssrJSON-benchmark"
     c.drawString(40, 20, text)
     link_start = 40 + c.stringWidth("This report was generated by ")
-    link_end = link_start + c.stringWidth("https://github.com/Nambers/ssrJSON-benchmark")
+    link_end = link_start + c.stringWidth(
+        "https://github.com/Nambers/ssrJSON-benchmark"
+    )
     c.linkURL(
         "https://github.com/Nambers/ssrJSON-benchmark",
         (link_start, 20, link_end, 25),
@@ -568,6 +607,7 @@ def _generate_pdf_report(
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def generate_report_pdf(
     result: BenchmarkFinalResult, file: str, out_dir: str | None = None
 ) -> str:
@@ -601,11 +641,7 @@ def generate_report_pdf(
     non_baseline_libs, ratio_lists = _collect_ratios(result, cats, masks)
     dist_svg = plot_distribution_svg(ratio_lists, non_baseline_libs)
 
-    template = fetch_header(
-        file.removeprefix("benchmark_result_").removesuffix(".json"),
-        result.processbytesgb,
-        result.perbinbytesmb,
-    )
+    template = fetch_header(result)
     out_path = _generate_pdf_report(
         figures,
         header_text=template,
@@ -631,11 +667,7 @@ def generate_report_markdown(
     if not os.path.exists(report_folder):
         os.makedirs(report_folder)
 
-    template = fetch_header(
-        file.removeprefix("benchmark_result_").removesuffix(".json"),
-        result.processbytesgb,
-        result.perbinbytesmb,
-    )
+    template = fetch_header(result)
     template += "\n\n## TL;DR\n\nTLDRIMGPLACEHOLDER\n\n"
 
     cats, masks, benchmark_groups = _get_cats_and_masks(result)

@@ -164,60 +164,74 @@ PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
     PyObject *callable;
     usize repeat;
     PyObject *call_args;
-    PyObject *times_list = NULL;
-    static const char *kwlist[] = {"func", "repeat", "args", "times_list", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKO|O", (char **)kwlist,
-                                     &callable, &repeat, &call_args, &times_list)) {
+    static const char *kwlist[] = {"func", "repeat", "args", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKO", (char **)kwlist,
+                                     &callable, &repeat, &call_args)) {
         PyErr_SetString(PyExc_TypeError, "Invalid argument");
-        goto fail;
+        return NULL;
     }
-    //
     if (!PyCallable_Check(callable)) {
         PyErr_SetString(PyExc_TypeError, "First argument must be callable");
-        goto fail;
+        return NULL;
     }
     if (!PyTuple_Check(call_args)) {
         PyErr_SetString(PyExc_TypeError, "Third argument must be tuple");
-        goto fail;
+        return NULL;
     }
-    if (times_list != NULL && times_list != Py_None) {
-        if (!PyList_Check(times_list)) {
-            PyErr_SetString(PyExc_TypeError, "times_list must be a list");
-            goto fail;
-        }
-        if ((usize)PyList_GET_SIZE(times_list) < repeat) {
-            PyErr_SetString(PyExc_ValueError, "times_list is too small for the given repeat count");
-            goto fail;
-        }
-    } else {
-        times_list = NULL;
+    // Allocate C array for per-iteration times
+    usize *times_buf = (usize *)malloc(repeat * sizeof(usize));
+    if (!times_buf) {
+        PyErr_NoMemory();
+        return NULL;
     }
-    //
     usize total = 0;
     for (usize i = 0; i < repeat; i++) {
         usize start = perf_counter();
         PyObject *result = PyObject_Call(callable, call_args, NULL);
         usize end = perf_counter();
         if (unlikely(!result)) {
+            free(times_buf);
             if (!PyErr_Occurred()) {
                 PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
             }
-            goto fail;
-        } else {
-            Py_DECREF(result);
+            return NULL;
         }
+        Py_DECREF(result);
         usize elapsed = end - start;
+        times_buf[i] = elapsed;
         total += elapsed;
-        if (times_list) {
-            PyObject *elapsed_obj = PyLong_FromUnsignedLongLong(elapsed);
-            if (!elapsed_obj) goto fail;
-            Py_DECREF(PyList_GET_ITEM(times_list, i));
-            PyList_SET_ITEM(times_list, i, elapsed_obj);
-        }
     }
-    return PyLong_FromUnsignedLongLong(total);
-fail:;
-    return NULL;
+    // Build Python list from C array
+    PyObject *times_list = PyList_New(repeat);
+    if (!times_list) {
+        free(times_buf);
+        return NULL;
+    }
+    for (usize i = 0; i < repeat; i++) {
+        PyObject *val = PyLong_FromUnsignedLongLong(times_buf[i]);
+        if (!val) {
+            free(times_buf);
+            Py_DECREF(times_list);
+            return NULL;
+        }
+        PyList_SET_ITEM(times_list, i, val);
+    }
+    free(times_buf);
+    // Return (total, times_list)
+    PyObject *total_obj = PyLong_FromUnsignedLongLong(total);
+    if (!total_obj) {
+        Py_DECREF(times_list);
+        return NULL;
+    }
+    PyObject *ret = PyTuple_New(2);
+    if (!ret) {
+        Py_DECREF(total_obj);
+        Py_DECREF(times_list);
+        return NULL;
+    }
+    PyTuple_SET_ITEM(ret, 0, total_obj);
+    PyTuple_SET_ITEM(ret, 1, times_list);
+    return ret;
 }
 
 PyObject *run_object_benchmark(PyObject *self, PyObject *args,

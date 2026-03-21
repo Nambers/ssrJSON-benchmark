@@ -15,6 +15,7 @@ from .result_types import (
     BenchmarkFinalResult,
     BenchmarkResultPerFile,
     BenchmarkResultPerFileTargetLib,
+    SystemInfo,
     compute_std_dev,
 )
 
@@ -31,6 +32,7 @@ PRINT_INDEX_GROUPS = ["Loads & Dumps to str", "Dumps to bytes"]
 # Library availability detection
 # ---------------------------------------------------------------------------
 
+
 def _lib_available(name: str) -> bool:
     return find_spec(name) is not None
 
@@ -44,12 +46,14 @@ def _get_available_third_party_libs() -> list[str]:
 def _import_lib(name: str):
     """Dynamically import a library by name."""
     import importlib
+
     return importlib.import_module(name)
 
 
 # ---------------------------------------------------------------------------
 # Benchmark function / group definitions
 # ---------------------------------------------------------------------------
+
 
 class BenchmarkFunction:
     def __init__(self, func: Callable, library_name: str) -> None:
@@ -80,6 +84,7 @@ class BenchmarkGroup:
 # ---------------------------------------------------------------------------
 # Benchmarker functions
 # ---------------------------------------------------------------------------
+
 
 def _gc_prepare():
     gc.collect()
@@ -114,23 +119,29 @@ def _recursive_check_cache(obj, want_cache: bool):
 
 def ensure_utf8_cache(encodable):
     import orjson
+
     orjson.dumps(encodable)
 
 
-def _benchmark(repeat_time: int, times_per_bin: int, func, data: bytes) -> tuple[int, list[int]]:
+def _benchmark(
+    repeat_time: int, times_per_bin: int, func, data: bytes
+) -> tuple[int, list[int]]:
     """Run repeat benchmark for bytes input. Returns (total_ns, per_iteration_times)."""
     gc_was_enabled = _gc_prepare()
     try:
-        times_list = [0] * repeat_time
         internal.run_object_accumulate_benchmark(func, 1, (data,))
-        total = internal.run_object_accumulate_benchmark(func, repeat_time, (data,), times_list)
+        total, times_list = internal.run_object_accumulate_benchmark(
+            func, repeat_time, (data,)
+        )
         return total, times_list
     finally:
         if gc_was_enabled:
             gc.enable()
 
 
-def _benchmark_unicode_arg(repeat_time: int, times_per_bin: int, func, unicode: str) -> tuple[int, list[int]]:
+def _benchmark_unicode_arg(
+    repeat_time: int, times_per_bin: int, func, unicode: str
+) -> tuple[int, list[int]]:
     """Run repeat benchmark, disabling utf-8 cache. Returns (total_ns, per_iteration_times)."""
     gc_was_enabled = _gc_prepare()
     try:
@@ -190,9 +201,10 @@ def _benchmark_with_dump_cache(
         data = json.loads(raw_bytes)
         ensure_utf8_cache(data)
         assert _recursive_check_cache(data, True)
-        times_list = [0] * repeat_time
         internal.run_object_accumulate_benchmark(func, 1, (data,))
-        total = internal.run_object_accumulate_benchmark(func, repeat_time, (data,), times_list)
+        total, times_list = internal.run_object_accumulate_benchmark(
+            func, repeat_time, (data,)
+        )
         return total, times_list
     finally:
         if gc_was_enabled:
@@ -202,6 +214,7 @@ def _benchmark_with_dump_cache(
 # ---------------------------------------------------------------------------
 # Benchmark group definitions (with optional libraries)
 # ---------------------------------------------------------------------------
+
 
 def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     available = _get_available_third_party_libs()
@@ -215,7 +228,9 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     for name in available:
         libs[name] = _import_lib(name)
 
-    def _build_functions(func_defs: list[tuple[Callable, str]]) -> list[BenchmarkFunction]:
+    def _build_functions(
+        func_defs: list[tuple[Callable, str]],
+    ) -> list[BenchmarkFunction]:
         """Build list of BenchmarkFunctions, skipping unavailable libraries."""
         result = []
         for func, lib_name in func_defs:
@@ -241,12 +256,15 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
         loads_str_funcs.append((orjson.loads, "orjson"))
     if ssrjson:
         loads_str_funcs.append((ssrjson.loads, "ssrjson"))
-    groups.append(BenchmarkGroup(
-        _benchmark_unicode_arg,
-        _build_functions(loads_str_funcs),
-        INDEXED_GROUPS[0], "loads str",
-        input_preprocessor=lambda x: x.decode("utf-8"),
-    ))
+    groups.append(
+        BenchmarkGroup(
+            _benchmark_unicode_arg,
+            _build_functions(loads_str_funcs),
+            INDEXED_GROUPS[0],
+            "loads str",
+            input_preprocessor=lambda x: x.decode("utf-8"),
+        )
+    )
 
     # loads bytes
     loads_bytes_funcs = [(json.loads, "json")]
@@ -258,143 +276,196 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
         loads_bytes_funcs.append((orjson.loads, "orjson"))
     if ssrjson:
         loads_bytes_funcs.append((ssrjson.loads, "ssrjson"))
-    groups.append(BenchmarkGroup(
-        _benchmark,
-        _build_functions(loads_bytes_funcs),
-        INDEXED_GROUPS[0], "loads bytes",
-    ))
+    groups.append(
+        BenchmarkGroup(
+            _benchmark,
+            _build_functions(loads_bytes_funcs),
+            INDEXED_GROUPS[0],
+            "loads bytes",
+        )
+    )
 
     # dumps to str
     dumps_str_funcs = [(lambda x: json.dumps(x, ensure_ascii=False), "json")]
     if ujson:
         dumps_str_funcs.append((lambda x: ujson.dumps(x, ensure_ascii=False), "ujson"))
     if msgspec:
-        dumps_str_funcs.append((lambda x: msgspec.json.encode(x).decode("utf-8"), "msgspec"))
+        dumps_str_funcs.append(
+            (lambda x: msgspec.json.encode(x).decode("utf-8"), "msgspec")
+        )
     if orjson:
         dumps_str_funcs.append((lambda x: orjson.dumps(x).decode("utf-8"), "orjson"))
     if ssrjson:
         dumps_str_funcs.append((ssrjson.dumps, "ssrjson"))
-    groups.append(BenchmarkGroup(
-        _benchmark_invalidate_dump_cache,
-        _build_functions(dumps_str_funcs),
-        INDEXED_GROUPS[0], "dumps to str",
-        is_dumps=True,
-    ))
+    groups.append(
+        BenchmarkGroup(
+            _benchmark_invalidate_dump_cache,
+            _build_functions(dumps_str_funcs),
+            INDEXED_GROUPS[0],
+            "dumps to str",
+            is_dumps=True,
+        )
+    )
 
     # dumps to str (indented2)
-    dumps_str_indent_funcs = [(lambda x: json.dumps(x, indent=2, ensure_ascii=False), "json")]
+    dumps_str_indent_funcs = [
+        (lambda x: json.dumps(x, indent=2, ensure_ascii=False), "json")
+    ]
     if ujson:
-        dumps_str_indent_funcs.append((lambda x: ujson.dumps(x, indent=2, ensure_ascii=False), "ujson"))
+        dumps_str_indent_funcs.append(
+            (lambda x: ujson.dumps(x, indent=2, ensure_ascii=False), "ujson")
+        )
     if msgspec:
-        dumps_str_indent_funcs.append((
-            lambda x: msgspec.json.format(msgspec.json.encode(x), indent=2).decode("utf-8"),
-            "msgspec",
-        ))
+        dumps_str_indent_funcs.append(
+            (
+                lambda x: msgspec.json.format(msgspec.json.encode(x), indent=2).decode(
+                    "utf-8"
+                ),
+                "msgspec",
+            )
+        )
     if orjson:
-        dumps_str_indent_funcs.append((
-            lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2).decode("utf-8"),
-            "orjson",
-        ))
+        dumps_str_indent_funcs.append(
+            (
+                lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2).decode("utf-8"),
+                "orjson",
+            )
+        )
     if ssrjson:
         dumps_str_indent_funcs.append((lambda x: ssrjson.dumps(x, indent=2), "ssrjson"))
-    groups.append(BenchmarkGroup(
-        _benchmark_invalidate_dump_cache,
-        _build_functions(dumps_str_indent_funcs),
-        INDEXED_GROUPS[0], "dumps to str (indented2)",
-        is_dumps=True,
-    ))
+    groups.append(
+        BenchmarkGroup(
+            _benchmark_invalidate_dump_cache,
+            _build_functions(dumps_str_indent_funcs),
+            INDEXED_GROUPS[0],
+            "dumps to str (indented2)",
+            is_dumps=True,
+        )
+    )
 
     # dumps to bytes
-    dumps_bytes_funcs = [(lambda x: json.dumps(x, ensure_ascii=False).encode("utf-8"), "json")]
+    dumps_bytes_funcs = [
+        (lambda x: json.dumps(x, ensure_ascii=False).encode("utf-8"), "json")
+    ]
     if ujson:
-        dumps_bytes_funcs.append((lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"), "ujson"))
+        dumps_bytes_funcs.append(
+            (lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"), "ujson")
+        )
     if msgspec:
         dumps_bytes_funcs.append((msgspec.json.encode, "msgspec"))
     if orjson:
         dumps_bytes_funcs.append((orjson.dumps, "orjson"))
     if ssrjson:
         dumps_bytes_funcs.append((ssrjson.dumps_to_bytes, "ssrjson"))
-    groups.append(BenchmarkGroup(
-        _benchmark_invalidate_dump_cache,
-        _build_functions(dumps_bytes_funcs),
-        INDEXED_GROUPS[1], "dumps to bytes",
-        is_dumps=True,
-    ))
+    groups.append(
+        BenchmarkGroup(
+            _benchmark_invalidate_dump_cache,
+            _build_functions(dumps_bytes_funcs),
+            INDEXED_GROUPS[1],
+            "dumps to bytes",
+            is_dumps=True,
+        )
+    )
 
     # dumps to bytes (indented2)
     dumps_bytes_indent_funcs = [
         (lambda x: json.dumps(x, indent=2, ensure_ascii=False).encode("utf-8"), "json")
     ]
     if ujson:
-        dumps_bytes_indent_funcs.append((
-            lambda x: ujson.dumps(x, indent=2, ensure_ascii=False).encode("utf-8"),
-            "ujson",
-        ))
+        dumps_bytes_indent_funcs.append(
+            (
+                lambda x: ujson.dumps(x, indent=2, ensure_ascii=False).encode("utf-8"),
+                "ujson",
+            )
+        )
     if msgspec:
-        dumps_bytes_indent_funcs.append((
-            lambda x: msgspec.json.format(msgspec.json.encode(x), indent=2),
-            "msgspec",
-        ))
+        dumps_bytes_indent_funcs.append(
+            (
+                lambda x: msgspec.json.format(msgspec.json.encode(x), indent=2),
+                "msgspec",
+            )
+        )
     if orjson:
-        dumps_bytes_indent_funcs.append((
-            lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2),
-            "orjson",
-        ))
+        dumps_bytes_indent_funcs.append(
+            (
+                lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2),
+                "orjson",
+            )
+        )
     if ssrjson:
-        dumps_bytes_indent_funcs.append((lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson"))
-    groups.append(BenchmarkGroup(
-        _benchmark_invalidate_dump_cache,
-        _build_functions(dumps_bytes_indent_funcs),
-        INDEXED_GROUPS[1], "dumps to bytes (indented2)",
-        is_dumps=True,
-    ))
+        dumps_bytes_indent_funcs.append(
+            (lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson")
+        )
+    groups.append(
+        BenchmarkGroup(
+            _benchmark_invalidate_dump_cache,
+            _build_functions(dumps_bytes_indent_funcs),
+            INDEXED_GROUPS[1],
+            "dumps to bytes (indented2)",
+            is_dumps=True,
+        )
+    )
 
     # dumps to bytes (cached) - only relevant for non-ASCII
     dumps_bytes_cached_funcs = [
         (lambda x: json.dumps(x, ensure_ascii=False).encode("utf-8"), "json")
     ]
     if ujson:
-        dumps_bytes_cached_funcs.append((
-            lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
-            "ujson",
-        ))
+        dumps_bytes_cached_funcs.append(
+            (
+                lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
+                "ujson",
+            )
+        )
     if msgspec:
         dumps_bytes_cached_funcs.append((msgspec.json.encode, "msgspec"))
     if orjson:
         dumps_bytes_cached_funcs.append((orjson.dumps, "orjson"))
     if ssrjson:
         dumps_bytes_cached_funcs.append((ssrjson.dumps_to_bytes, "ssrjson"))
-    groups.append(BenchmarkGroup(
-        _benchmark_with_dump_cache,
-        _build_functions(dumps_bytes_cached_funcs),
-        INDEXED_GROUPS[1], "dumps to bytes (cached)",
-        is_dumps=True, skip_when_ascii=True,
-    ))
+    groups.append(
+        BenchmarkGroup(
+            _benchmark_with_dump_cache,
+            _build_functions(dumps_bytes_cached_funcs),
+            INDEXED_GROUPS[1],
+            "dumps to bytes (cached)",
+            is_dumps=True,
+            skip_when_ascii=True,
+        )
+    )
 
     # dumps to bytes (write cache) - only relevant for non-ASCII
     dumps_bytes_wcache_funcs = [
         (lambda x: json.dumps(x, ensure_ascii=False).encode("utf-8"), "json")
     ]
     if ujson:
-        dumps_bytes_wcache_funcs.append((
-            lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
-            "ujson",
-        ))
+        dumps_bytes_wcache_funcs.append(
+            (
+                lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
+                "ujson",
+            )
+        )
     if msgspec:
         dumps_bytes_wcache_funcs.append((msgspec.json.encode, "msgspec"))
     if orjson:
         dumps_bytes_wcache_funcs.append((orjson.dumps, "orjson"))
     if ssrjson:
-        dumps_bytes_wcache_funcs.append((
-            lambda x: ssrjson.dumps_to_bytes(x, is_write_cache=True),
-            "ssrjson",
-        ))
-    groups.append(BenchmarkGroup(
-        _benchmark_invalidate_dump_cache,
-        _build_functions(dumps_bytes_wcache_funcs),
-        INDEXED_GROUPS[1], "dumps to bytes (write cache)",
-        is_dumps=True, skip_when_ascii=True,
-    ))
+        dumps_bytes_wcache_funcs.append(
+            (
+                lambda x: ssrjson.dumps_to_bytes(x, is_write_cache=True),
+                "ssrjson",
+            )
+        )
+    groups.append(
+        BenchmarkGroup(
+            _benchmark_invalidate_dump_cache,
+            _build_functions(dumps_bytes_wcache_funcs),
+            INDEXED_GROUPS[1],
+            "dumps to bytes (write cache)",
+            is_dumps=True,
+            skip_when_ascii=True,
+        )
+    )
 
     return tuple(groups)
 
@@ -406,6 +477,7 @@ def _get_benchmark_libraries() -> dict[str, BenchmarkGroup]:
 # ---------------------------------------------------------------------------
 # Inspect helpers
 # ---------------------------------------------------------------------------
+
 
 def _update_inspect_result(old_kind, old_size, old_is_ascii, kind, str_size, is_ascii):
     return (
@@ -463,10 +535,12 @@ def _get_processed_size(func: Callable, input_data, is_dumps):
 # System info helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_ssrjson_rev():
     if not _lib_available("ssrjson"):
         return "unknown"
     import ssrjson
+
     return (
         getattr(ssrjson, "__version__", None) or getattr(ssrjson, "ssrjson").__version__
     )
@@ -483,6 +557,7 @@ def _get_cpu_name() -> str:
     cpuinfo_spec = find_spec("cpuinfo")
     if cpuinfo_spec is not None:
         import cpuinfo
+
         cpu_name = cpuinfo.get_cpu_info().get("brand_raw", "UnknownCPU")
     else:
         cpu_name: str = platform.processor()
@@ -504,48 +579,65 @@ def _get_cpu_name() -> str:
 def _get_mem_total() -> str:
     if _lib_available("psutil"):
         import psutil
+
         mem_total = psutil.virtual_memory().total // 1024 / (1024**2)
         return f"{mem_total:.3f}GiB"
     return "Unknown"
 
 
-def fetch_header(rev, processbytesgb, perbinbytesmb) -> str:
-    with open(os.path.join(_CUR_DIR, "template.md"), "r") as f:
-        template = f.read()
+def _collect_system_info() -> SystemInfo:
+    """Collect system and environment information for the benchmark result."""
+    info = SystemInfo()
+    info.rev = _get_ssrjson_rev()
+    info.python = sys.version
+    info.os_info = f"{platform.system()} {platform.machine()} {platform.release()} {platform.version()}"
+    info.chipset = _get_cpu_name()
+    info.memory = _get_mem_total()
+    info.generated_time = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime())
 
-    lib_versions = {}
     for lib_name in ["orjson", "msgspec", "ujson"]:
         if _lib_available(lib_name):
             mod = _import_lib(lib_name)
-            lib_versions[lib_name] = getattr(mod, "__version__", "?")
+            ver = getattr(mod, "__version__", "?")
         else:
-            lib_versions[lib_name] = "N/A"
+            ver = "N/A"
+        setattr(info, f"{lib_name}_ver", ver)
 
-    ssrjson_features = "N/A"
     if _lib_available("ssrjson"):
         import ssrjson
-        feats = ssrjson.get_current_features()
-        ssrjson_features = str({k: feats[k] for k in ("multi_lib", "simd")})
 
+        feats = ssrjson.get_current_features()
+        info.simd_flags = str({k: feats[k] for k in ("multi_lib", "simd")})
+
+    return info
+
+
+def fetch_header(result: BenchmarkFinalResult) -> str:
+    """Format header text from system info stored in the benchmark result."""
+    with open(os.path.join(_CUR_DIR, "template.md"), "r") as f:
+        template = f.read()
+
+    si = result.system_info
     return template.format(
-        REV=rev,
-        TIME=time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime()),
-        OS=f"{platform.system()} {platform.machine()} {platform.release()} {platform.version()}",
-        PYTHON=sys.version,
-        ORJSON_VER=lib_versions["orjson"],
-        MSGSPEC_VER=lib_versions["msgspec"],
-        UJSON_VER=lib_versions["ujson"],
-        SIMD_FLAGS=ssrjson_features,
-        CHIPSET=_get_cpu_name(),
-        MEM=_get_mem_total(),
-        PROCESS_MEM="{:.3f}GiB".format(processbytesgb),
-        PER_BIN_MEM="{}MiB".format(perbinbytesmb),
+        REV=si.rev,
+        TIME=si.generated_time,
+        OS=si.os_info,
+        PYTHON=si.python,
+        ORJSON_VER=si.orjson_ver,
+        MSGSPEC_VER=si.msgspec_ver,
+        UJSON_VER=si.ujson_ver,
+        SIMD_FLAGS=si.simd_flags,
+        CHIPSET=si.chipset,
+        MEM=si.memory,
+        PROCESS_MEM="{:.3f}GiB".format(result.processbytesgb),
+        PER_BIN_MEM="{}MiB".format(result.perbinbytesmb),
     )
 
 
 # ---------------------------------------------------------------------------
 # Core benchmark execution
 # ---------------------------------------------------------------------------
+
 
 def _run_benchmark(
     cur_result_file: BenchmarkResultPerFile,
@@ -645,6 +737,7 @@ def run_benchmark(
     old_write_cache_status = None
     if ssrjson_available:
         import ssrjson
+
         old_write_cache_status = ssrjson.get_current_features()["write_utf8_cache"]
         ssrjson.write_utf8_cache(False)
 
@@ -660,6 +753,7 @@ def run_benchmark(
         result.filenames = [f.name for f in files]
         result.processbytesgb = process_bytes / 1024 / 1024 / 1024
         result.perbinbytesmb = int(bin_process_bytes / 1024 / 1024)
+        result.system_info = _collect_system_info()
 
         for index_s in INDEXED_GROUPS:
             result.results[index_s] = {}
@@ -683,6 +777,7 @@ def run_benchmark(
     finally:
         if ssrjson_available and old_write_cache_status is not None:
             import ssrjson
+
             ssrjson.write_utf8_cache(old_write_cache_status)
 
 

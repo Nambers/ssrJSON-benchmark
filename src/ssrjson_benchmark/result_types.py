@@ -131,17 +131,87 @@ class BenchmarkResultPerFile:
         obj.pyunicode_size = d.get("pyunicode_size", 0)
         obj.pyunicode_kind = d.get("pyunicode_kind", 0)
         obj.pyunicode_is_ascii = d.get("pyunicode_is_ascii", True)
-        reserved_keys = {"byte_size", "pyunicode_size", "pyunicode_kind", "pyunicode_is_ascii"}
+        reserved_keys = {
+            "byte_size",
+            "pyunicode_size",
+            "pyunicode_kind",
+            "pyunicode_is_ascii",
+        }
         for k, v in d.items():
             if k not in reserved_keys and isinstance(v, dict):
                 obj.targets[k] = BenchmarkResultPerFileTarget.from_dict(v)
         return obj
 
 
+class SystemInfo:
+    """System and environment information collected during benchmark."""
+
+    __slots__ = (
+        "rev",
+        "python",
+        "os_info",
+        "chipset",
+        "memory",
+        "orjson_ver",
+        "msgspec_ver",
+        "ujson_ver",
+        "simd_flags",
+        "generated_time",
+    )
+
+    def __init__(self):
+        self.rev: str = ""
+        self.python: str = ""
+        self.os_info: str = ""
+        self.chipset: str = ""
+        self.memory: str = ""
+        self.orjson_ver: str = "N/A"
+        self.msgspec_ver: str = "N/A"
+        self.ujson_ver: str = "N/A"
+        self.simd_flags: str = "N/A"
+        self.generated_time: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "rev": self.rev,
+            "python": self.python,
+            "os_info": self.os_info,
+            "chipset": self.chipset,
+            "memory": self.memory,
+            "orjson_ver": self.orjson_ver,
+            "msgspec_ver": self.msgspec_ver,
+            "ujson_ver": self.ujson_ver,
+            "simd_flags": self.simd_flags,
+            "generated_time": self.generated_time,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SystemInfo":
+        obj = cls()
+        obj.rev = d.get("rev", "")
+        obj.python = d.get("python", "")
+        obj.os_info = d.get("os_info", "")
+        obj.chipset = d.get("chipset", "")
+        obj.memory = d.get("memory", "")
+        obj.orjson_ver = d.get("orjson_ver", "N/A")
+        obj.msgspec_ver = d.get("msgspec_ver", "N/A")
+        obj.ujson_ver = d.get("ujson_ver", "N/A")
+        obj.simd_flags = d.get("simd_flags", "N/A")
+        obj.generated_time = d.get("generated_time", "")
+        return obj
+
+
 class BenchmarkFinalResult:
     """Top-level benchmark result containing all data."""
 
-    __slots__ = ("categories", "results", "filenames", "processbytesgb", "perbinbytesmb")
+    __slots__ = (
+        "categories",
+        "results",
+        "filenames",
+        "processbytesgb",
+        "perbinbytesmb",
+        "system_info",
+    )
 
     def __init__(self):
         self.categories: list[str] = []
@@ -149,6 +219,7 @@ class BenchmarkFinalResult:
         self.filenames: list[str] = []
         self.processbytesgb: float = 0.0
         self.perbinbytesmb: int = 0
+        self.system_info: SystemInfo = SystemInfo()
 
     @classmethod
     def parse(cls, j: dict) -> "BenchmarkFinalResult":
@@ -157,6 +228,8 @@ class BenchmarkFinalResult:
         ret.filenames = j["filenames"]
         ret.processbytesgb = j["processbytesgb"]
         ret.perbinbytesmb = j["perbinbytesmb"]
+        if "system_info" in j:
+            ret.system_info = SystemInfo.from_dict(j["system_info"])
         ret.results = {}
         for index_name, files_dict in j["results"].items():
             ret.results[index_name] = {}
@@ -178,6 +251,7 @@ class BenchmarkFinalResult:
             "filenames": self.filenames,
             "processbytesgb": self.processbytesgb,
             "perbinbytesmb": self.perbinbytesmb,
+            "system_info": self.system_info.to_dict(),
         }
 
     def dumps(self) -> str:
