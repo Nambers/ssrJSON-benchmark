@@ -2,11 +2,11 @@
   "nodes": {
     "nixpkgs": {
       "locked": {
-        "lastModified": 1767379071,
-        "narHash": "sha256-EgE0pxsrW9jp9YFMkHL9JMXxcqi/OoumPJYwf+Okucw=",
+        "lastModified": 1773821835,
+        "narHash": "sha256-TJ3lSQtW0E2JrznGVm8hOQGVpXjJyXY2guAxku2O9A4=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "fb7944c166a3b630f177938e478f0378e64ce108",
+        "rev": "b40629efe5d6ec48dd1efba650c797ddbd39ace0",
         "type": "github"
       },
       "original": {
@@ -18,11 +18,11 @@
     },
     "nixpkgs-legacy": {
       "locked": {
-        "lastModified": 1764836381,
-        "narHash": "sha256-8jemYbbW9EBttQKHep7Rj8kzXaxsrk/lACdXA2DN5Xk=",
+        "lastModified": 1767313136,
+        "narHash": "sha256-16KkgfdYqjaeRGBaYsNrhPRRENs0qzkQVUooNHtoy2w=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "ff06bd3398fb1bea6c937039ece7e7c8aa396ebf",
+        "rev": "ac62194c3917d5f474c1a844b6fd6da2db95077d",
         "type": "github"
       },
       "original": {
@@ -35,10 +35,11 @@
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
+        "ssrjson-nix-dev": "ssrjson-nix-dev",
         "ssrjson_": "ssrjson_"
       }
     },
-    "ssrjson_": {
+    "ssrjson-nix-dev": {
       "inputs": {
         "nixpkgs": [
           "nixpkgs"
@@ -46,11 +47,31 @@
         "nixpkgs-legacy": "nixpkgs-legacy"
       },
       "locked": {
-        "lastModified": 1767627431,
-        "narHash": "sha256-Fwg+htOOOBrTinbyuqMQ7DiqagcRO8JjnOSRfvbVgGg=",
+        "lastModified": 1774091599,
+        "narHash": "sha256-GRNISVI1At4orPaSRnz3FuL1Dl0dqP19hfoRT7ILcyo=",
+        "owner": "antares0982",
+        "repo": "ssrjson-nix-dev",
+        "rev": "e86be6f3e240dc36bd713cbdc3b05c943cbba475",
+        "type": "github"
+      },
+      "original": {
+        "owner": "antares0982",
+        "repo": "ssrjson-nix-dev",
+        "type": "github"
+      }
+    },
+    "ssrjson_": {
+      "inputs": {
+        "ssrjson-nix-dev": [
+          "ssrjson-nix-dev"
+        ]
+      },
+      "locked": {
+        "lastModified": 1773842803,
+        "narHash": "sha256-nJrxnP9yXX8cAsYgPpsKEK6HIlrC4EvDzYAFr14cCo0=",
         "owner": "antares0982",
         "repo": "ssrjson",
-        "rev": "49b74193bb6c962fd2ab06a1334f1cb3582ad0b3",
+        "rev": "f53df5936c6884ba599bfd4f12044f0542367b02",
         "type": "github"
       },
       "original": {

@@ -5,6 +5,7 @@
   mkShell ? pkgs.mkShell,
   callPackage ? pkgs.callPackage,
   ssrjson,
+  py-minor-ver-str,
   ...
 }:
 let
@@ -12,7 +13,7 @@ let
   # define the nix-pyenv directory
   nix-pyenv-directory = ".nix-pyenv";
   # define version
-  usingPython = pkgs.python313;
+  usingPython = pkgs."python3${py-minor-ver-str}";
   # import required python packages
   requiredPythonPackages = callPackage ./py_requirements.nix { inherit ssrjson; };
   # create python environment
