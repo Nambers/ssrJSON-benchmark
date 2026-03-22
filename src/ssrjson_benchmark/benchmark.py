@@ -129,11 +129,7 @@ def _benchmark(
     """Run repeat benchmark for bytes input. Returns (total_ns, per_iteration_times)."""
     gc_was_enabled = _gc_prepare()
     try:
-        internal.run_object_accumulate_benchmark(func, 1, (data,))
-        total, times_list = internal.run_object_accumulate_benchmark(
-            func, repeat_time, (data,)
-        )
-        return total, times_list
+        return internal.benchmark_bytes_load(func, repeat_time, (data,))
     finally:
         if gc_was_enabled:
             gc.enable()
@@ -145,23 +141,9 @@ def _benchmark_unicode_arg(
     """Run repeat benchmark, disabling utf-8 cache. Returns (total_ns, per_iteration_times)."""
     gc_was_enabled = _gc_prepare()
     try:
-        all_times: list[int] = []
-        times_left = repeat_time
-        total = 0
-        while times_left != 0:
-            cur_bin_size = min(times_left, times_per_bin)
-            times_left -= cur_bin_size
-            benchmark_data = internal.copy_unicode_list_invalidate_cache(
-                unicode, cur_bin_size + 1
-            )
-            assert _check_str_cache(benchmark_data[0], False)
-            internal.run_object_benchmark(func, (benchmark_data[0],))
-            for i in range(1, cur_bin_size + 1):
-                elapsed = internal.run_object_benchmark(func, (benchmark_data[i],))
-                total += elapsed
-                all_times.append(elapsed)
-            del benchmark_data
-        return total, all_times
+        return internal.benchmark_unicode_invalidate_cache(
+            func, repeat_time, times_per_bin, unicode
+        )
     finally:
         if gc_was_enabled:
             gc.enable()
@@ -173,21 +155,9 @@ def _benchmark_invalidate_dump_cache(
     """Invalidate UTF-8 cache for the same input. Returns (total_ns, per_iteration_times)."""
     gc_was_enabled = _gc_prepare()
     try:
-        all_times: list[int] = []
-        times_left = repeat_time
-        total = 0
-        while times_left != 0:
-            cur_bin_size = min(times_left, times_per_bin)
-            times_left -= cur_bin_size
-            benchmark_data = [json.loads(raw_bytes) for _ in range(cur_bin_size + 1)]
-            assert _recursive_check_cache(benchmark_data[0], False)
-            internal.run_object_benchmark(func, (benchmark_data[0],))
-            for i in range(1, cur_bin_size + 1):
-                elapsed = internal.run_object_benchmark(func, (benchmark_data[i],))
-                total += elapsed
-                all_times.append(elapsed)
-            del benchmark_data
-        return total, all_times
+        return internal.benchmark_invalidate_dump_cache(
+            func, repeat_time, times_per_bin, raw_bytes, json.loads
+        )
     finally:
         if gc_was_enabled:
             gc.enable()
@@ -201,11 +171,7 @@ def _benchmark_with_dump_cache(
         data = json.loads(raw_bytes)
         ensure_utf8_cache(data)
         assert _recursive_check_cache(data, True)
-        internal.run_object_accumulate_benchmark(func, 1, (data,))
-        total, times_list = internal.run_object_accumulate_benchmark(
-            func, repeat_time, (data,)
-        )
-        return total, times_list
+        return internal.benchmark_with_dump_cache(func, repeat_time, (data,))
     finally:
         if gc_was_enabled:
             gc.enable()
