@@ -1,3 +1,4 @@
+import enum
 import gc
 import json
 import math
@@ -55,6 +56,12 @@ def _import_lib(name: str):
 # ---------------------------------------------------------------------------
 
 
+class BenchmarkCategory(enum.Enum):
+    LOADS = "loads"
+    DUMPS = "dumps"
+    DUMPS_TO_BYTES = "dumps_to_bytes"
+
+
 class BenchmarkFunction:
     def __init__(self, func: Callable, library_name: str) -> None:
         self.func = func
@@ -68,17 +75,21 @@ class BenchmarkGroup:
         functions: list[BenchmarkFunction],
         index_name: str,
         group_name: str,
+        category: BenchmarkCategory,
         input_preprocessor: Callable[[Any], Any] = lambda x: x,
-        is_dumps: bool = False,
         skip_when_ascii: bool = False,
     ) -> None:
         self.benchmarker = benchmarker
         self.functions = functions
         self.index_name = index_name
         self.group_name = group_name
+        self.category = category
         self.input_preprocessor = input_preprocessor
-        self.is_dumps = is_dumps
         self.skip_when_ascii = skip_when_ascii
+
+    @property
+    def is_dumps(self) -> bool:
+        return self.category != BenchmarkCategory.LOADS
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +239,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             _build_functions(loads_str_funcs),
             INDEXED_GROUPS[0],
             "loads str",
+            category=BenchmarkCategory.LOADS,
             input_preprocessor=lambda x: x.decode("utf-8"),
         )
     )
@@ -248,6 +260,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             _build_functions(loads_bytes_funcs),
             INDEXED_GROUPS[0],
             "loads bytes",
+            category=BenchmarkCategory.LOADS,
         )
     )
 
@@ -269,7 +282,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             _build_functions(dumps_str_funcs),
             INDEXED_GROUPS[0],
             "dumps to str",
-            is_dumps=True,
+            category=BenchmarkCategory.DUMPS,
         )
     )
 
@@ -305,7 +318,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             _build_functions(dumps_str_indent_funcs),
             INDEXED_GROUPS[0],
             "dumps to str (indented2)",
-            is_dumps=True,
+            category=BenchmarkCategory.DUMPS,
         )
     )
 
@@ -329,7 +342,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             _build_functions(dumps_bytes_funcs),
             INDEXED_GROUPS[1],
             "dumps to bytes",
-            is_dumps=True,
+            category=BenchmarkCategory.DUMPS_TO_BYTES,
         )
     )
 
@@ -368,7 +381,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             _build_functions(dumps_bytes_indent_funcs),
             INDEXED_GROUPS[1],
             "dumps to bytes (indented2)",
-            is_dumps=True,
+            category=BenchmarkCategory.DUMPS_TO_BYTES,
         )
     )
 
@@ -395,7 +408,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             _build_functions(dumps_bytes_cached_funcs),
             INDEXED_GROUPS[1],
             "dumps to bytes (cached)",
-            is_dumps=True,
+            category=BenchmarkCategory.DUMPS_TO_BYTES,
             skip_when_ascii=True,
         )
     )
@@ -428,7 +441,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             _build_functions(dumps_bytes_wcache_funcs),
             INDEXED_GROUPS[1],
             "dumps to bytes (write cache)",
-            is_dumps=True,
+            category=BenchmarkCategory.DUMPS_TO_BYTES,
             skip_when_ascii=True,
         )
     )
@@ -693,10 +706,26 @@ def is_unix_except_macos():
     return system in ("Linux", "AIX", "FreeBSD")
 
 
+def _filter_groups(
+    benchmark_libraries: dict[str, BenchmarkGroup],
+    only: str | None,
+) -> dict[str, BenchmarkGroup]:
+    """Filter benchmark groups by the --only flag.
+
+    Valid values match ``BenchmarkCategory`` members: 'loads', 'dumps',
+    'dumps_to_bytes'.  ``None`` means no filtering.
+    """
+    if only is None:
+        return benchmark_libraries
+    category = BenchmarkCategory(only)
+    return {k: v for k, v in benchmark_libraries.items() if v.category == category}
+
+
 def run_benchmark(
     files: list[pathlib.Path],
     process_bytes: int,
     bin_process_bytes: int,
+    only: str | None = None,
 ) -> tuple[BenchmarkFinalResult, str]:
     """Run benchmarks and generate a JSON result file. Returns (result, filename)."""
     # Disable ssrJSON cache writing globally if available
@@ -715,18 +744,22 @@ def run_benchmark(
         result.results = {}
 
         benchmark_libraries = _get_benchmark_libraries()
+        filtered_libraries = _filter_groups(benchmark_libraries, only)
 
-        result.categories = list(benchmark_libraries.keys())
+        result.categories = list(filtered_libraries.keys())
         result.filenames = [f.name for f in files]
         result.processbytesgb = process_bytes / 1024 / 1024 / 1024
         result.perbinbytesmb = int(bin_process_bytes / 1024 / 1024)
         result.system_info = _collect_system_info()
 
-        for index_s in INDEXED_GROUPS:
+        active_index_groups = sorted(
+            {g.index_name for g in filtered_libraries.values()}
+        )
+        for index_s in active_index_groups:
             result.results[index_s] = {}
             for bench_file in files:
                 k, v = _run_file_benchmark(
-                    benchmark_libraries,
+                    filtered_libraries,
                     bench_file,
                     process_bytes,
                     bin_process_bytes,

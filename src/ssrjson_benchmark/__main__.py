@@ -14,43 +14,115 @@ def _check_visual_deps():
             )
 
 
-def _cmd_benchmark(args) -> int:
+def _derive_sibling_path(primary_path: str, new_ext: str) -> str:
+    """Derive a sibling file path from *primary_path* by changing the extension.
+
+    If primary_path (lowercased) ends with .pdf or .json, replace that suffix
+    with *new_ext* (e.g. ".md", ".json").  Otherwise append *new_ext* directly.
+    """
+    lower = primary_path.lower()
+    for suffix in (".pdf", ".json"):
+        if lower.endswith(suffix):
+            return primary_path[: -len(suffix)] + new_ext
+    return primary_path + new_ext
+
+
+def _add_benchmark_args(parser):
+    """Add common benchmark arguments to a parser."""
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Output file path. For benchmark: JSON path; for print/full: PDF path "
+        "(or Markdown path when only Markdown is generated).",
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
+        "-d",
+        "--in-dir",
+        help="Benchmark JSON files directory. If not provided, use the files bundled in this package.",
+        required=False,
+    )
+    parser.add_argument(
+        "--process-gigabytes",
+        help="Total gigabytes to process per test case, default 0.25 (float)",
+        required=False,
+        default=0.25,
+        type=float,
+    )
+    parser.add_argument(
+        "--bin-process-megabytes",
+        help="Maximum bytes to process per bin, default 8 (int)",
+        required=False,
+        default=8,
+        type=int,
+    )
+    from .benchmark import BenchmarkCategory
+
+    parser.add_argument(
+        "--only",
+        choices=[c.value for c in BenchmarkCategory],
+        help="Only run a subset of tests: loads (2 groups), dumps (2 groups), or dumps_to_bytes (up to 4 groups).",
+        required=False,
+        default=None,
+    )
+
+
+def _resolve_benchmark_files(in_dir):
+    """Resolve benchmark input files from a directory."""
     import os
     import pathlib
 
+    if not in_dir:
+        in_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_files")
+    benchmark_files = sorted(pathlib.Path(in_dir).glob("*.json"))
+    if not benchmark_files:
+        print(f"No benchmark file found using given path: {in_dir}")
+        return None
+    return benchmark_files
+
+
+def _run_benchmark_from_args(args):
+    """Run benchmark from parsed args. Returns (result, json_path) or None on error."""
     from .benchmark import run_benchmark
 
-    _benchmark_files_dir = args.in_dir
-    if not _benchmark_files_dir:
-        _benchmark_files_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "_files"
-        )
-    benchmark_files = sorted(pathlib.Path(_benchmark_files_dir).glob("*.json"))
-    if not benchmark_files:
-        print(f"No benchmark file found using given path: {_benchmark_files_dir}")
-        return 1
+    benchmark_files = _resolve_benchmark_files(args.in_dir)
+    if benchmark_files is None:
+        return None
 
     process_bytes = int(args.process_gigabytes * 1024 * 1024 * 1024)
     bin_process_bytes = args.bin_process_megabytes * 1024 * 1024
     if process_bytes <= 0 or bin_process_bytes <= 0:
         print("process-gigabytes and bin-process-megabytes must be positive.")
-        return 1
+        return None
 
-    _, default_file = run_benchmark(benchmark_files, process_bytes, bin_process_bytes)
-    # If user specified -o, move result to that path
+    result, default_file = run_benchmark(
+        benchmark_files, process_bytes, bin_process_bytes, only=args.only
+    )
+    return result, default_file
+
+
+def _cmd_benchmark(args) -> int:
+    ret = _run_benchmark_from_args(args)
+    if ret is None:
+        return 1
+    _, json_path = ret
+
     if args.output:
         import shutil
 
-        if args.output != default_file:
-            shutil.move(default_file, args.output)
-        print(f"Benchmark result saved to {args.output}")
-    else:
-        print(f"Benchmark result saved to {default_file}")
+        if args.output != json_path:
+            shutil.move(json_path, args.output)
+        json_path = args.output
+
+    print(f"Benchmark result saved to {json_path}")
     return 0
 
 
 def _cmd_print(args) -> int:
     import json
+    import os
+    import shutil
 
     from .benchmark import parse_file_result
 
@@ -62,22 +134,92 @@ def _cmd_print(args) -> int:
 
     from .report import generate_report_markdown, generate_report_pdf
 
-    file = args.result_json.split("/")[-1].split("\\")[-1]
+    file = os.path.basename(args.result_json)
     out_dir = args.out_dir
+    if out_dir is None:
+        out_dir = os.path.dirname(os.path.abspath(args.result_json))
 
-    if args.markdown:
-        generate_report_markdown(result, file, out_dir)
-    if not args.no_pdf:
-        generate_report_pdf(result, file, out_dir)
+    pdf_only = not args.no_pdf and not args.markdown
+    md_only = args.no_pdf and args.markdown
+    both = not args.no_pdf and args.markdown
+
     if args.no_pdf and not args.markdown:
         print("Nothing to do. Use --markdown or remove --no-pdf.")
         return 1
+
+    if args.markdown:
+        md_path = generate_report_markdown(result, file, out_dir)
+        if args.output and md_only:
+            if args.output != md_path:
+                shutil.move(md_path, args.output)
+            print(f"Markdown report saved to {args.output}")
+        elif args.output and both:
+            md_dest = _derive_sibling_path(args.output, ".md")
+            if md_dest != md_path:
+                shutil.move(md_path, md_dest)
+            print(f"Markdown report saved to {md_dest}")
+
+    if not args.no_pdf:
+        pdf_path = generate_report_pdf(result, file, out_dir)
+        if args.output and (pdf_only or both):
+            if args.output != pdf_path:
+                shutil.move(pdf_path, args.output)
+            print(f"PDF report saved to {args.output}")
+
+    return 0
+
+
+def _cmd_full(args) -> int:
+    import os
+    import shutil
+
+    _check_visual_deps()
+
+    ret = _run_benchmark_from_args(args)
+    if ret is None:
+        return 1
+    result, json_path = ret
+    print(f"Benchmark result saved to {json_path}")
+
+    from .report import generate_report_markdown, generate_report_pdf
+
+    file = os.path.basename(json_path)
+    out_dir = os.path.dirname(os.path.abspath(json_path))
+
+    md_path = generate_report_markdown(result, file, out_dir)
+    pdf_path = generate_report_pdf(result, file, out_dir)
+
+    if args.output:
+        if args.output != pdf_path:
+            shutil.move(pdf_path, args.output)
+        pdf_path = args.output
+
+        md_dest = _derive_sibling_path(args.output, ".md")
+        if md_dest != md_path:
+            shutil.move(md_path, md_dest)
+        md_path = md_dest
+
+        if args.keep_json:
+            json_dest = _derive_sibling_path(args.output, ".json")
+            if json_dest != json_path:
+                shutil.move(json_path, json_dest)
+            json_path = json_dest
+            print(f"JSON result saved to {json_path}")
+        else:
+            os.remove(json_path)
+            print(f"Removed intermediate JSON file: {json_path}")
+    else:
+        if args.keep_json:
+            print(f"JSON result kept at {json_path}")
+        else:
+            os.remove(json_path)
+            print(f"Removed intermediate JSON file: {json_path}")
+
     return 0
 
 
 def main():
     import argparse
-    import os
 
     parser = argparse.ArgumentParser(
         prog="ssrjson_benchmark",
@@ -90,33 +232,7 @@ def main():
         "benchmark",
         help="Run benchmarks and save result to a JSON file.",
     )
-    bench_parser.add_argument(
-        "-o",
-        "--output",
-        help="Output JSON file path. If not provided, uses a default name based on ssrjson version.",
-        required=False,
-        default=None,
-    )
-    bench_parser.add_argument(
-        "-d",
-        "--in-dir",
-        help="Benchmark JSON files directory. If not provided, use the files bundled in this package.",
-        required=False,
-    )
-    bench_parser.add_argument(
-        "--process-gigabytes",
-        help="Total gigabytes to process per test case, default 0.25 (float)",
-        required=False,
-        default=0.25,
-        type=float,
-    )
-    bench_parser.add_argument(
-        "--bin-process-megabytes",
-        help="Maximum bytes to process per bin, default 8 (int)",
-        required=False,
-        default=8,
-        type=int,
-    )
+    _add_benchmark_args(bench_parser)
 
     # --- print subcommand ---
     print_parser = subparsers.add_parser(
@@ -126,6 +242,14 @@ def main():
     print_parser.add_argument(
         "result_json",
         help="Path to a benchmark result JSON file.",
+    )
+    print_parser.add_argument(
+        "-o",
+        "--output",
+        help="Output file path. PDF path by default; Markdown path when only Markdown is generated. "
+        "When both are generated, Markdown path is derived by replacing .pdf with .md (or appending .md).",
+        required=False,
+        default=None,
     )
     print_parser.add_argument(
         "-m",
@@ -140,9 +264,21 @@ def main():
     )
     print_parser.add_argument(
         "--out-dir",
-        help="Output directory for reports",
+        help="Output directory for reports. Defaults to the directory containing the result JSON.",
         required=False,
-        default=os.getcwd(),
+        default=None,
+    )
+
+    # --- full subcommand ---
+    full_parser = subparsers.add_parser(
+        "full",
+        help="Run benchmarks, generate reports (PDF + Markdown), then delete the intermediate JSON.",
+    )
+    _add_benchmark_args(full_parser)
+    full_parser.add_argument(
+        "--keep-json",
+        help="Keep the intermediate JSON file instead of deleting it.",
+        action="store_true",
     )
 
     args = parser.parse_args()
@@ -155,6 +291,8 @@ def main():
         return _cmd_benchmark(args)
     elif args.command == "print":
         return _cmd_print(args)
+    elif args.command == "full":
+        return _cmd_full(args)
     return 1
 
 
