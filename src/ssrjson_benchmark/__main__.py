@@ -152,19 +152,21 @@ def _cmd_print(args) -> int:
         if args.output and md_only:
             if args.output != md_path:
                 shutil.move(md_path, args.output)
-            print(f"Markdown report saved to {args.output}")
+            md_path = args.output
         elif args.output and both:
             md_dest = _derive_sibling_path(args.output, ".md")
             if md_dest != md_path:
                 shutil.move(md_path, md_dest)
-            print(f"Markdown report saved to {md_dest}")
+            md_path = md_dest
+        print(f"Markdown report saved to {md_path}")
 
     if not args.no_pdf:
         pdf_path = generate_report_pdf(result, file, out_dir)
         if args.output and (pdf_only or both):
             if args.output != pdf_path:
                 shutil.move(pdf_path, args.output)
-            print(f"PDF report saved to {args.output}")
+            pdf_path = args.output
+        print(f"PDF report saved to {pdf_path}")
 
     return 0
 
@@ -210,6 +212,7 @@ def _cmd_full(args) -> int:
             if md_dest != md_path:
                 shutil.move(md_path, md_dest)
             md_path = md_dest
+        print(f"Markdown report saved to {md_path}")
 
     if do_pdf:
         pdf_path = generate_report_pdf(result, file, out_dir)
@@ -217,6 +220,7 @@ def _cmd_full(args) -> int:
             if args.output != pdf_path:
                 shutil.move(pdf_path, args.output)
             pdf_path = args.output
+        print(f"PDF report saved to {pdf_path}")
 
     if args.keep_json:
         if args.output:

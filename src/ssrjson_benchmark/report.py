@@ -663,7 +663,6 @@ def generate_report_pdf(
         output_pdf_path=os.path.join(out_dir, report_name),
         distribution_svg=dist_svg,
     )
-    print(f"Report saved to {out_path}")
     return out_path
 
 
@@ -721,5 +720,4 @@ def generate_report_markdown(
     ret = os.path.join(report_folder, report_name)
     with open(ret, "w") as f:
         f.write(template)
-    print(f"Report saved to {ret}")
     return ret
