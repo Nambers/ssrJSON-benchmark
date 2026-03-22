@@ -175,6 +175,13 @@ def _cmd_full(args) -> int:
 
     _check_visual_deps()
 
+    do_pdf = not args.no_pdf
+    do_md = args.markdown
+    if not do_pdf and not do_md:
+        # Default: generate both when neither flag is given
+        do_pdf = True
+        do_md = True
+
     ret = _run_benchmark_from_args(args)
     if ret is None:
         return 1
@@ -184,36 +191,43 @@ def _cmd_full(args) -> int:
     from .report import generate_report_markdown, generate_report_pdf
 
     file = os.path.basename(json_path)
-    out_dir = os.path.dirname(os.path.abspath(json_path))
+    out_dir = args.out_dir
+    if out_dir is None:
+        out_dir = os.path.dirname(os.path.abspath(json_path))
 
-    md_path = generate_report_markdown(result, file, out_dir)
-    pdf_path = generate_report_pdf(result, file, out_dir)
+    pdf_only = do_pdf and not do_md
+    md_only = do_md and not do_pdf
+    both = do_pdf and do_md
 
-    if args.output:
-        if args.output != pdf_path:
-            shutil.move(pdf_path, args.output)
-        pdf_path = args.output
+    if do_md:
+        md_path = generate_report_markdown(result, file, out_dir)
+        if args.output and md_only:
+            if args.output != md_path:
+                shutil.move(md_path, args.output)
+            md_path = args.output
+        elif args.output and both:
+            md_dest = _derive_sibling_path(args.output, ".md")
+            if md_dest != md_path:
+                shutil.move(md_path, md_dest)
+            md_path = md_dest
 
-        md_dest = _derive_sibling_path(args.output, ".md")
-        if md_dest != md_path:
-            shutil.move(md_path, md_dest)
-        md_path = md_dest
+    if do_pdf:
+        pdf_path = generate_report_pdf(result, file, out_dir)
+        if args.output and (pdf_only or both):
+            if args.output != pdf_path:
+                shutil.move(pdf_path, args.output)
+            pdf_path = args.output
 
-        if args.keep_json:
+    if args.keep_json:
+        if args.output:
             json_dest = _derive_sibling_path(args.output, ".json")
             if json_dest != json_path:
                 shutil.move(json_path, json_dest)
             json_path = json_dest
-            print(f"JSON result saved to {json_path}")
-        else:
-            os.remove(json_path)
-            print(f"Removed intermediate JSON file: {json_path}")
+        print(f"JSON result saved to {json_path}")
     else:
-        if args.keep_json:
-            print(f"JSON result kept at {json_path}")
-        else:
-            os.remove(json_path)
-            print(f"Removed intermediate JSON file: {json_path}")
+        os.remove(json_path)
+        print(f"Removed intermediate JSON file: {json_path}")
 
     return 0
 
@@ -275,6 +289,23 @@ def main():
         help="Run benchmarks, generate reports (PDF + Markdown), then delete the intermediate JSON.",
     )
     _add_benchmark_args(full_parser)
+    full_parser.add_argument(
+        "-m",
+        "--markdown",
+        help="Generate Markdown report",
+        action="store_true",
+    )
+    full_parser.add_argument(
+        "--no-pdf",
+        help="Don't generate PDF report",
+        action="store_true",
+    )
+    full_parser.add_argument(
+        "--out-dir",
+        help="Output directory for reports. Defaults to the directory containing the result JSON.",
+        required=False,
+        default=None,
+    )
     full_parser.add_argument(
         "--keep-json",
         help="Keep the intermediate JSON file instead of deleting it.",
