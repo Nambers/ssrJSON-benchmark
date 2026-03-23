@@ -128,64 +128,94 @@ def _recursive_check_cache(obj, want_cache: bool):
     return True
 
 
+def _recursive_copy_obj(obj):
+    """Recursively copy a JSON-serializable object, using copy_unicode for str/dict keys."""
+    if isinstance(obj, dict):
+        return {
+            internal.copy_unicode(k): _recursive_copy_obj(v) for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_recursive_copy_obj(item) for item in obj]
+    if isinstance(obj, str):
+        return internal.copy_unicode(obj)
+    return obj
+
+
 def ensure_utf8_cache(encodable):
     import orjson
 
     orjson.dumps(encodable)
 
 
+def _run_with_gc_disabled(
+    func: Callable[[], tuple[int, list[int]]],
+) -> tuple[int, list[int]]:
+    """Run func with GC disabled, restoring GC state afterwards."""
+    gc_was_enabled = _gc_prepare()
+    try:
+        return func()
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
 def _benchmark(
     repeat_time: int, times_per_bin: int, func, data: bytes
 ) -> tuple[int, list[int]]:
     """Run repeat benchmark for bytes input. Returns (total_ns, per_iteration_times)."""
-    gc_was_enabled = _gc_prepare()
-    try:
-        return internal.benchmark_bytes_load(func, repeat_time, (data,))
-    finally:
-        if gc_was_enabled:
-            gc.enable()
+    return _run_with_gc_disabled(
+        lambda: internal.benchmark_bytes_load(func, repeat_time, (data,))
+    )
 
 
 def _benchmark_unicode_arg(
     repeat_time: int, times_per_bin: int, func, unicode: str
 ) -> tuple[int, list[int]]:
     """Run repeat benchmark, disabling utf-8 cache. Returns (total_ns, per_iteration_times)."""
-    gc_was_enabled = _gc_prepare()
-    try:
-        return internal.benchmark_unicode_invalidate_cache(
-            func, repeat_time, times_per_bin, unicode
+    all_times: list[int] = []
+    total = 0
+    times_left = repeat_time
+    while times_left > 0:
+        cur_bin_size = min(times_left, times_per_bin)
+        times_left -= cur_bin_size
+        items = [internal.copy_unicode(unicode) for _ in range(cur_bin_size + 1)]
+        bin_total, bin_times = _run_with_gc_disabled(
+            lambda: internal.benchmark_bin(func, items)
         )
-    finally:
-        if gc_was_enabled:
-            gc.enable()
+        total += bin_total
+        all_times.extend(bin_times)
+    return total, all_times
 
 
 def _benchmark_invalidate_dump_cache(
     repeat_time: int, times_per_bin: int, func, raw_bytes: bytes
 ) -> tuple[int, list[int]]:
     """Invalidate UTF-8 cache for the same input. Returns (total_ns, per_iteration_times)."""
-    gc_was_enabled = _gc_prepare()
-    try:
-        return internal.benchmark_invalidate_dump_cache(
-            func, repeat_time, times_per_bin, raw_bytes, json.loads
+    source_obj = json.loads(raw_bytes)
+    all_times: list[int] = []
+    total = 0
+    times_left = repeat_time
+    while times_left > 0:
+        cur_bin_size = min(times_left, times_per_bin)
+        times_left -= cur_bin_size
+        items = [_recursive_copy_obj(source_obj) for _ in range(cur_bin_size + 1)]
+        bin_total, bin_times = _run_with_gc_disabled(
+            lambda: internal.benchmark_bin(func, items)
         )
-    finally:
-        if gc_was_enabled:
-            gc.enable()
+        total += bin_total
+        all_times.extend(bin_times)
+    return total, all_times
 
 
 def _benchmark_with_dump_cache(
     repeat_time: int, times_per_bin: int, func, raw_bytes: bytes
 ) -> tuple[int, list[int]]:
-    gc_was_enabled = _gc_prepare()
-    try:
-        data = json.loads(raw_bytes)
-        ensure_utf8_cache(data)
-        assert _recursive_check_cache(data, True)
-        return internal.benchmark_with_dump_cache(func, repeat_time, (data,))
-    finally:
-        if gc_was_enabled:
-            gc.enable()
+    data = json.loads(raw_bytes)
+    ensure_utf8_cache(data)
+    assert _recursive_check_cache(data, True)
+    return _run_with_gc_disabled(
+        lambda: internal.benchmark_with_dump_cache(func, repeat_time, (data,))
+    )
 
 
 # ---------------------------------------------------------------------------

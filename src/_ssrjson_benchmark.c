@@ -81,13 +81,7 @@ typedef struct UsizeArray {
     usize size;
 } UsizeArray;
 
-typedef struct PyObjectArray {
-    PyObject **data;
-    usize size;
-} PyObjectArray;
-
 static UsizeArray _static_times_buf = {NULL, 0};
-static PyObjectArray _static_pyobj_buf = {NULL, 0};
 
 /**
  * Ensure the static UsizeArray has at least `needed` capacity.
@@ -96,22 +90,6 @@ static PyObjectArray _static_pyobj_buf = {NULL, 0};
 static int _ensure_usize_capacity(UsizeArray *arr, usize needed) {
     if (arr->size >= needed) return 0;
     usize *new_data = (usize *)PyMem_Realloc(arr->data, needed * sizeof(usize));
-    if (unlikely(!new_data)) {
-        PyErr_NoMemory();
-        return -1;
-    }
-    arr->data = new_data;
-    arr->size = needed;
-    return 0;
-}
-
-/**
- * Ensure the static PyObjectArray has at least `needed` capacity.
- * Returns 0 on success, -1 on failure (sets PyErr_NoMemory).
- */
-static int _ensure_pyobj_capacity(PyObjectArray *arr, usize needed) {
-    if (arr->size >= needed) return 0;
-    PyObject **new_data = (PyObject **)PyMem_Realloc(arr->data, needed * sizeof(PyObject *));
     if (unlikely(!new_data)) {
         PyErr_NoMemory();
         return -1;
@@ -381,91 +359,17 @@ static int _benchmark_bin(PyObject *callable, PyObject **items, usize bin_size,
 }
 
 /**
- * Helper to Py_DECREF a partially-filled array of PyObjects.
- * Does NOT free the array itself (caller manages the buffer lifetime).
- */
-static void _decref_pyobj_array(PyObject **arr, usize count) {
-    for (usize i = 0; i < count; i++) Py_DECREF(arr[i]);
-}
-
-/**
- * benchmark_unicode_invalidate_cache(func, repeat, times_per_bin, unicode)
+ * benchmark_bin(func, items)
  *
- * Binned benchmark: for each bin, create copies of `unicode` without UTF-8 cache,
- * warmup with first copy, then time the rest. Returns (total_ns, [per_iter_ns]).
+ * Warmup with items[0], then time func(items[i]) for i in 1..len(items)-1.
+ * Returns (total_ns, [per_iter_ns]).
  */
-PyObject *benchmark_unicode_invalidate_cache(PyObject *self, PyObject *args,
-                                             PyObject *kwargs) {
+PyObject *benchmark_bin_py(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *callable;
-    usize repeat;
-    usize times_per_bin;
-    PyObject *unicode;
-    static const char *kwlist[] = {"func", "repeat", "times_per_bin", "unicode", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKKO", (char **)kwlist,
-                                     &callable, &repeat, &times_per_bin, &unicode)) {
-        PyErr_SetString(PyExc_TypeError, "Invalid argument");
-        return NULL;
-    }
-    if (!PyCallable_Check(callable)) {
-        PyErr_SetString(PyExc_TypeError, "First argument must be callable");
-        return NULL;
-    }
-    if (!PyUnicode_CheckExact(unicode)) {
-        PyErr_SetString(PyExc_TypeError, "unicode argument must be str");
-        return NULL;
-    }
-
-    usize copies_count = 0;
-
-    if (_ensure_usize_capacity(&_static_times_buf, repeat)) return NULL;
-    usize *times_buf = _static_times_buf.data;
-    // The pyobj buffer needs at most (times_per_bin + 1) entries
-    if (_ensure_pyobj_capacity(&_static_pyobj_buf, times_per_bin + 1)) return NULL;
-    PyObject **copies = _static_pyobj_buf.data;
-
-    PyUnicodeCopyInfo unicode_copy_info;
-    unicode_copy_info.valid = false;
-    usize times_left = repeat;
-    usize total = 0;
-    usize buf_idx = 0;
-    while (times_left != 0) {
-        usize cur_bin_size = times_left < times_per_bin ? times_left : times_per_bin;
-        times_left -= cur_bin_size;
-        usize list_size = cur_bin_size + 1;
-        copies_count = 0;
-        for (usize i = 0; i < list_size; i++) {
-            copies[i] = _copy_unicode(unicode, &unicode_copy_info);
-            if (unlikely(!copies[i])) goto fail;
-            copies_count = i + 1;
-        }
-        if (_benchmark_bin(callable, copies, cur_bin_size, times_buf, &buf_idx, &total))
-            goto fail;
-        _decref_pyobj_array(copies, copies_count);
-        copies_count = 0;
-    }
-    return _build_times_result(times_buf, repeat, total);
-
-fail:
-    _decref_pyobj_array(copies, copies_count);
-    return NULL;
-}
-
-/**
- * benchmark_invalidate_dump_cache(func, repeat, times_per_bin, raw_bytes, loads_func)
- *
- * Binned benchmark: for each bin, call loads_func(raw_bytes) to create fresh objects
- * without UTF-8 cache, warmup with first, then time the rest. Returns (total_ns, [per_iter_ns]).
- */
-PyObject *benchmark_invalidate_dump_cache(PyObject *self, PyObject *args,
-                                          PyObject *kwargs) {
-    PyObject *callable;
-    usize repeat;
-    usize times_per_bin;
-    PyObject *raw_bytes;
-    PyObject *loads_func;
-    static const char *kwlist[] = {"func", "repeat", "times_per_bin", "raw_bytes", "loads_func", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKKOO", (char **)kwlist,
-                                     &callable, &repeat, &times_per_bin, &raw_bytes, &loads_func)) {
+    PyObject *items_list;
+    static const char *kwlist[] = {"func", "items", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO", (char **)kwlist,
+                                     &callable, &items_list)) {
         PyErr_SetString(PyExc_TypeError, "Invalid argument");
         return NULL;
     }
@@ -473,50 +377,27 @@ PyObject *benchmark_invalidate_dump_cache(PyObject *self, PyObject *args,
         PyErr_SetString(PyExc_TypeError, "func must be callable");
         return NULL;
     }
-    if (!PyCallable_Check(loads_func)) {
-        PyErr_SetString(PyExc_TypeError, "loads_func must be callable");
+    if (!PyList_Check(items_list)) {
+        PyErr_SetString(PyExc_TypeError, "items must be a list");
         return NULL;
     }
+    Py_ssize_t list_size = PyList_GET_SIZE(items_list);
+    if (list_size < 2) {
+        PyErr_SetString(PyExc_ValueError, "items must have at least 2 elements");
+        return NULL;
+    }
+    usize bin_size = (usize)(list_size - 1);
 
-    PyObject *loads_args = NULL;
-    usize objects_count = 0;
-
-    loads_args = PyTuple_New(1);
-    if (unlikely(!loads_args)) goto fail;
-    Py_INCREF(raw_bytes);
-    PyTuple_SET_ITEM(loads_args, 0, raw_bytes);
-
-    if (_ensure_usize_capacity(&_static_times_buf, repeat)) goto fail;
+    if (_ensure_usize_capacity(&_static_times_buf, bin_size)) return NULL;
     usize *times_buf = _static_times_buf.data;
-    // The pyobj buffer needs at most (times_per_bin + 1) entries
-    if (_ensure_pyobj_capacity(&_static_pyobj_buf, times_per_bin + 1)) goto fail;
-    PyObject **objects = _static_pyobj_buf.data;
 
-    usize times_left = repeat;
+    // Use list items directly as a PyObject** array
+    PyObject **items = &PyList_GET_ITEM(items_list, 0);
     usize total = 0;
     usize buf_idx = 0;
-    while (times_left != 0) {
-        usize cur_bin_size = times_left < times_per_bin ? times_left : times_per_bin;
-        times_left -= cur_bin_size;
-        usize list_size = cur_bin_size + 1;
-        objects_count = 0;
-        for (usize i = 0; i < list_size; i++) {
-            objects[i] = PyObject_Call(loads_func, loads_args, NULL);
-            if (unlikely(!objects[i])) goto fail;
-            objects_count = i + 1;
-        }
-        if (_benchmark_bin(callable, objects, cur_bin_size, times_buf, &buf_idx, &total))
-            goto fail;
-        _decref_pyobj_array(objects, objects_count);
-        objects_count = 0;
-    }
-    Py_DECREF(loads_args);
-    return _build_times_result(times_buf, repeat, total);
-
-fail:
-    _decref_pyobj_array(_static_pyobj_buf.data, objects_count);
-    Py_XDECREF(loads_args);
-    return NULL;
+    if (_benchmark_bin(callable, items, bin_size, times_buf, &buf_idx, &total))
+        return NULL;
+    return _build_times_result(times_buf, bin_size, total);
 }
 
 /**
@@ -657,13 +538,28 @@ fail:;
     return NULL;
 }
 
+PyObject *copy_unicode(PyObject *self, PyObject *args, PyObject *kwargs) {
+    PyObject *unicode;
+    static const char *kwlist[] = {"unicode", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O", (char **)kwlist, &unicode)) {
+        return NULL;
+    }
+    if (!PyUnicode_CheckExact(unicode)) {
+        PyErr_SetString(PyExc_TypeError, "Argument must be str, not other types or subclass of str");
+        return NULL;
+    }
+    PyUnicodeCopyInfo unicode_copy_info;
+    unicode_copy_info.valid = false;
+    return _copy_unicode(unicode, &unicode_copy_info);
+}
+
 static PyMethodDef ssrjson_benchmark_methods[] = {
+        {"copy_unicode", (PyCFunction)copy_unicode, METH_VARARGS | METH_KEYWORDS, "Copy a unicode object without UTF-8 cache."},
         {"copy_unicode_list_invalidate_cache", (PyCFunction)copy_unicode_list_invalidate_cache, METH_VARARGS | METH_KEYWORDS, "Copy unicode list invalidate cache."},
         {"run_object_accumulate_benchmark", (PyCFunction)run_object_accumulate_benchmark, METH_VARARGS | METH_KEYWORDS, "Benchmark."},
         {"run_object_benchmark", (PyCFunction)run_object_benchmark, METH_VARARGS | METH_KEYWORDS, "Benchmark."},
         {"benchmark_bytes_load", (PyCFunction)benchmark_bytes_load, METH_VARARGS | METH_KEYWORDS, "Warmup + repeat benchmark for bytes input. Returns (total_ns, [per_iter_ns])."},
-        {"benchmark_unicode_invalidate_cache", (PyCFunction)benchmark_unicode_invalidate_cache, METH_VARARGS | METH_KEYWORDS, "Binned benchmark with unicode cache invalidation. Returns (total_ns, [per_iter_ns])."},
-        {"benchmark_invalidate_dump_cache", (PyCFunction)benchmark_invalidate_dump_cache, METH_VARARGS | METH_KEYWORDS, "Binned benchmark invalidating dump cache via loads. Returns (total_ns, [per_iter_ns])."},
+        {"benchmark_bin", (PyCFunction)benchmark_bin_py, METH_VARARGS | METH_KEYWORDS, "Warmup with items[0], time func(items[1..]). Returns (total_ns, [per_iter_ns])."},
         {"benchmark_with_dump_cache", (PyCFunction)benchmark_with_dump_cache, METH_VARARGS | METH_KEYWORDS, "Warmup + repeat benchmark with cache enabled. Returns (total_ns, [per_iter_ns])."},
         {"inspect_pyunicode", (PyCFunction)inspect_pyunicode, METH_VARARGS | METH_KEYWORDS, "Inspect PyUnicode."},
         {"pyunicode_has_utf8_cache", (PyCFunction)pyunicode_has_utf8_cache, METH_VARARGS | METH_KEYWORDS, "Check if str has UTF-8 cache."},
