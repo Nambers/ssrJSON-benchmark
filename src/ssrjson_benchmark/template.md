@@ -5,6 +5,7 @@ Python:         `{PYTHON}`
 Orjson:         `{ORJSON_VER}`
 MsgSpec:        `{MSGSPEC_VER}`
 Ujson:          `{UJSON_VER}`
+PydanticCore:   `{PYDANTIC_CORE_VER}`
 Generated time: {TIME}
 OS:             {OS}
 SIMD flag:      {SIMD_FLAGS}

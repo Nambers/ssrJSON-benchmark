@@ -20,6 +20,17 @@ _PDF_TEXT_FONT = "Courier"
 # ssrjson's color is always fixed
 _SSRJSON_COLOR = "#fd8d3c"
 
+# Canonical library display order – libraries not in this list are appended at
+# the end in their original discovery order.
+_CANONICAL_LIB_ORDER = [
+    "json",
+    "ujson",
+    "pydantic_core",
+    "msgspec",
+    "orjson",
+    "ssrjson",
+]
+
 # Color palette derived from the original _LIBRARIES_COLORS in reverse order
 # (excluding ssrjson). Colors are assigned sequentially to libraries enumerated
 # from bottom-to-top (i.e. reversed non-ssrjson library list).
@@ -147,9 +158,9 @@ def plot_benchmark_svg(
     if mask is None:
         mask = [True] * len(categories)
 
-    # Determine libraries from first visible category
-    libs = []
-    lib_colors = {}
+    # Determine libraries as the union across all visible categories,
+    # then sort according to the canonical display order.
+    libs_seen: set[str] = set()
     for i, cat in enumerate(categories):
         if mask[i] and cat in data:
             target = (
@@ -157,9 +168,12 @@ def plot_benchmark_svg(
                 if isinstance(data[cat], BenchmarkResultPerFileTarget)
                 else data[cat]
             )
-            libs = target.libraries
-            lib_colors = assign_colors(libs)
-            break
+            for lib in target.libraries:
+                libs_seen.add(lib)
+    # Sort by canonical order; unknown libs go to the end.
+    _order_map = {name: idx for idx, name in enumerate(_CANONICAL_LIB_ORDER)}
+    libs = sorted(libs_seen, key=lambda n: _order_map.get(n, len(_CANONICAL_LIB_ORDER)))
+    lib_colors = assign_colors(libs) if libs else {}
 
     if not libs:
         # Fallback: empty plot
@@ -171,7 +185,6 @@ def plot_benchmark_svg(
         plt.close(fig)
         return buf
 
-    colors = [lib_colors.get(n, "#999999") for n in libs]
     n = len(categories)
     bar_width = config.bar_width
 
@@ -186,19 +199,28 @@ def plot_benchmark_svg(
     if n == 1:
         axs = [axs]
 
-    x_positions = [i * (bar_width) for i in range(len(libs))]
-
     for i, (ax, cat) in enumerate(zip(axs, categories)):
         if not mask[i] or cat not in data:
             ax.axis("off")
             continue
 
         target = data[cat]
+        # Determine which libraries actually participated in this category
+        cat_libs_set = set(
+            target.libraries
+            if isinstance(target, BenchmarkResultPerFileTarget)
+            else target.keys()
+        )
+        # Only keep libs that actually participated, preserving canonical order
+        cat_libs = [name for name in libs if name in cat_libs_set]
+        cat_colors = [lib_colors.get(n, "#999999") for n in cat_libs]
+        cat_x_positions = [j * bar_width for j in range(len(cat_libs))]
+
         if isinstance(target, dict):
             # backward compat: dict access
             vals = []
             std_devs = []
-            for name in libs:
+            for name in cat_libs:
                 lib_data = target.get(name, {})
                 if isinstance(lib_data, dict):
                     vals.append(lib_data.get("ratio", 1.0))
@@ -212,17 +234,14 @@ def plot_benchmark_svg(
         else:
             vals = []
             std_devs = []
-            for name in libs:
-                if name in target:
-                    lib_result = target[name]
-                    vals.append(lib_result.ratio)
-                    # Convert std_dev from ns to ratio scale for display
-                    # std_dev is in ns, ratio = baseline_speed / this_speed
-                    # We show the coefficient of variation on the bar
-                    std_devs.append(lib_result.std_dev)
-                else:
-                    vals.append(1.0)
+            for name in cat_libs:
+                if name not in target:
+                    vals.append(None)
                     std_devs.append(0.0)
+                    continue
+                lib_result = target[name]
+                vals.append(lib_result.ratio)
+                std_devs.append(lib_result.std_dev)
             ssrjson_bps = target.ssrjson_bytes_per_sec
 
         gbps = ssrjson_bps / (1024**3) if ssrjson_bps else 0.0
@@ -230,8 +249,10 @@ def plot_benchmark_svg(
         # Compute ratio std dev for display (CV * ratio)
         # CV = std_dev / mean_per_iteration = std_dev * repeat_count / speed
         ratio_errors = []
-        for j_idx, name in enumerate(libs):
-            if name in target and not isinstance(target, dict):
+        for j_idx, name in enumerate(cat_libs):
+            if vals[j_idx] is None:
+                ratio_errors.append(0)
+            elif name in target and not isinstance(target, dict):
                 lib_result = target[name]
                 if (
                     lib_result.speed > 0
@@ -245,7 +266,10 @@ def plot_benchmark_svg(
             else:
                 ratio_errors.append(0)
 
-        for xi, val, col, err in zip(x_positions, vals, colors, ratio_errors):
+        for xi, val, col, err in zip(cat_x_positions, vals, cat_colors, ratio_errors):
+            if val is None:
+                continue
+
             ax.bar(xi, val, width=bar_width, color=col)
 
             # Show std dev whisker if enabled and significant
@@ -285,21 +309,25 @@ def plot_benchmark_svg(
                     color="#888888",
                 )
 
-        if "ssrjson" in libs and gbps > 0:
-            ssrjson_index = libs.index("ssrjson")
-            ax.text(
-                x_positions[ssrjson_index],
-                vals[ssrjson_index] / 2,
-                f"{gbps:.2f} GB/s",
-                ha="center",
-                va="center",
-                fontsize=config.gbps_fontsize,
-                color="#2c3e50",
-                fontweight="bold",
-            )
+        if "ssrjson" in cat_libs and gbps > 0:
+            ssrjson_index = cat_libs.index("ssrjson")
+            if vals[ssrjson_index] is not None:
+                ax.text(
+                    cat_x_positions[ssrjson_index],
+                    vals[ssrjson_index] / 2,
+                    f"{gbps:.2f} GB/s",
+                    ha="center",
+                    va="center",
+                    fontsize=config.gbps_fontsize,
+                    color="#2c3e50",
+                    fontweight="bold",
+                )
 
         ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
-        max_val_with_err = max(v + e for v, e in zip(vals, ratio_errors))
+        max_val_with_err = max(
+            (v + e for v, e in zip(vals, ratio_errors) if v is not None),
+            default=1.0,
+        )
         ax.set_ylim(0, max(max_val_with_err, 1.0) * 1.1)
 
         ax.tick_params(
@@ -432,17 +460,19 @@ def _get_cats_and_masks(result: BenchmarkFinalResult):
 
 
 def _get_non_baseline_libs(result: BenchmarkFinalResult) -> list[str]:
-    """Get the list of non-baseline library names from the result data."""
+    """Get the union of non-baseline library names from the result data, sorted by canonical order."""
+    libs_seen: set[str] = set()
     for index_name in INDEXED_GROUPS:
         if index_name in result.results:
             for filename in result.filenames:
                 if filename in result.results[index_name]:
                     file_result = result.results[index_name][filename]
                     for target in file_result.targets.values():
-                        non_baseline = [l for l in target.libraries if l != "json"]
-                        if non_baseline:
-                            return non_baseline
-    return []
+                        for lib in target.libraries:
+                            if lib != "json":
+                                libs_seen.add(lib)
+    _order_map = {name: idx for idx, name in enumerate(_CANONICAL_LIB_ORDER)}
+    return sorted(libs_seen, key=lambda n: _order_map.get(n, len(_CANONICAL_LIB_ORDER)))
 
 
 def _collect_ratios(result: BenchmarkFinalResult, cats, masks):

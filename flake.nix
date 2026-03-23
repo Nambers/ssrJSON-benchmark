@@ -2,10 +2,9 @@
   description = "A simple flake for a simple python environment";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     ssrjson-nix-dev = {
       url = "github:antares0982/ssrjson-nix-dev";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
     ssrjson_ = {
       url = "github:antares0982/ssrjson";
@@ -16,11 +15,12 @@
   outputs =
     {
       self,
-      nixpkgs,
+      ssrjson-nix-dev,
       ssrjson_,
       ...
     }:
     let
+      nixpkgs = ssrjson-nix-dev.ssrjson-nixpkgs;
       py-minor-ver = 14;
       py-minor-ver-str = builtins.toString py-minor-ver;
       forAllSystems =

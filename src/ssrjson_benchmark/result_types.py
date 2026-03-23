@@ -156,6 +156,7 @@ class SystemInfo:
         "orjson_ver",
         "msgspec_ver",
         "ujson_ver",
+        "pydantic_core_ver",
         "simd_flags",
         "generated_time",
     )
@@ -169,6 +170,7 @@ class SystemInfo:
         self.orjson_ver: str = "N/A"
         self.msgspec_ver: str = "N/A"
         self.ujson_ver: str = "N/A"
+        self.pydantic_core_ver: str = "N/A"
         self.simd_flags: str = "N/A"
         self.generated_time: str = ""
 
@@ -182,6 +184,7 @@ class SystemInfo:
             "orjson_ver": self.orjson_ver,
             "msgspec_ver": self.msgspec_ver,
             "ujson_ver": self.ujson_ver,
+            "pydantic_core_ver": self.pydantic_core_ver,
             "simd_flags": self.simd_flags,
             "generated_time": self.generated_time,
         }
@@ -197,6 +200,7 @@ class SystemInfo:
         obj.orjson_ver = d.get("orjson_ver", "N/A")
         obj.msgspec_ver = d.get("msgspec_ver", "N/A")
         obj.ujson_ver = d.get("ujson_ver", "N/A")
+        obj.pydantic_core_ver = d.get("pydantic_core_ver", "N/A")
         obj.simd_flags = d.get("simd_flags", "N/A")
         obj.generated_time = d.get("generated_time", "")
         return obj

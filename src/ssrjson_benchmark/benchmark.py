@@ -40,7 +40,7 @@ def _lib_available(name: str) -> bool:
 
 def _get_available_third_party_libs() -> list[str]:
     """Return list of available third-party JSON libraries (excluding stdlib json)."""
-    candidates = ["ujson", "msgspec", "orjson", "ssrjson"]
+    candidates = ["ujson", "pydantic_core", "msgspec", "orjson", "ssrjson"]
     return [lib for lib in candidates if _lib_available(lib)]
 
 
@@ -247,6 +247,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
 
     # Helper references
     ujson = libs.get("ujson")
+    pydantic_core = libs.get("pydantic_core")
     msgspec = libs.get("msgspec")
     orjson = libs.get("orjson")
     ssrjson = libs.get("ssrjson")
@@ -298,6 +299,10 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     dumps_str_funcs = [(lambda x: json.dumps(x, ensure_ascii=False), "json")]
     if ujson:
         dumps_str_funcs.append((lambda x: ujson.dumps(x, ensure_ascii=False), "ujson"))
+    if pydantic_core:
+        dumps_str_funcs.append(
+            (lambda x: pydantic_core.to_json(x).decode("utf-8"), "pydantic_core")
+        )
     if msgspec:
         dumps_str_funcs.append(
             (lambda x: msgspec.json.encode(x).decode("utf-8"), "msgspec")
@@ -323,6 +328,13 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     if ujson:
         dumps_str_indent_funcs.append(
             (lambda x: ujson.dumps(x, indent=2, ensure_ascii=False), "ujson")
+        )
+    if pydantic_core:
+        dumps_str_indent_funcs.append(
+            (
+                lambda x: pydantic_core.to_json(x, indent=2).decode("utf-8"),
+                "pydantic_core",
+            )
         )
     if msgspec:
         dumps_str_indent_funcs.append(
@@ -360,6 +372,8 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
         dumps_bytes_funcs.append(
             (lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"), "ujson")
         )
+    if pydantic_core:
+        dumps_bytes_funcs.append((pydantic_core.to_json, "pydantic_core"))
     if msgspec:
         dumps_bytes_funcs.append((msgspec.json.encode, "msgspec"))
     if orjson:
@@ -385,6 +399,13 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             (
                 lambda x: ujson.dumps(x, indent=2, ensure_ascii=False).encode("utf-8"),
                 "ujson",
+            )
+        )
+    if pydantic_core:
+        dumps_bytes_indent_funcs.append(
+            (
+                lambda x: pydantic_core.to_json(x, indent=2),
+                "pydantic_core",
             )
         )
     if msgspec:
@@ -426,6 +447,8 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 "ujson",
             )
         )
+    if pydantic_core:
+        dumps_bytes_cached_funcs.append((pydantic_core.to_json, "pydantic_core"))
     if msgspec:
         dumps_bytes_cached_funcs.append((msgspec.json.encode, "msgspec"))
     if orjson:
@@ -454,6 +477,8 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 "ujson",
             )
         )
+    if pydantic_core:
+        dumps_bytes_wcache_funcs.append((pydantic_core.to_json, "pydantic_core"))
     if msgspec:
         dumps_bytes_wcache_funcs.append((msgspec.json.encode, "msgspec"))
     if orjson:
@@ -604,7 +629,7 @@ def _collect_system_info() -> SystemInfo:
     info.memory = _get_mem_total()
     info.generated_time = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime())
 
-    for lib_name in ["orjson", "msgspec", "ujson"]:
+    for lib_name in ["orjson", "msgspec", "ujson", "pydantic_core"]:
         if _lib_available(lib_name):
             mod = _import_lib(lib_name)
             ver = getattr(mod, "__version__", "?")
@@ -635,6 +660,7 @@ def fetch_header(result: BenchmarkFinalResult) -> str:
         ORJSON_VER=si.orjson_ver,
         MSGSPEC_VER=si.msgspec_ver,
         UJSON_VER=si.ujson_ver,
+        PYDANTIC_CORE_VER=si.pydantic_core_ver,
         SIMD_FLAGS=si.simd_flags,
         CHIPSET=si.chipset,
         MEM=si.memory,
