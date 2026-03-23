@@ -27,6 +27,14 @@ def _derive_sibling_path(primary_path: str, new_ext: str) -> str:
     return primary_path + new_ext
 
 
+def _ensure_parent_dir(path: str) -> None:
+    import os
+
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
 def _add_benchmark_args(parser):
     """Add common benchmark arguments to a parser."""
     parser.add_argument(
@@ -200,6 +208,9 @@ def _cmd_full(args) -> int:
     pdf_only = do_pdf and not do_md
     md_only = do_md and not do_pdf
     both = do_pdf and do_md
+
+    if args.output:
+        _ensure_parent_dir(args.output)
 
     if do_md:
         md_path = generate_report_markdown(result, file, out_dir)

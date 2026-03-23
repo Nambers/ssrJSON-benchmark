@@ -336,15 +336,6 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 "pydantic_core",
             )
         )
-    if msgspec:
-        dumps_str_indent_funcs.append(
-            (
-                lambda x: msgspec.json.format(msgspec.json.encode(x), indent=2).decode(
-                    "utf-8"
-                ),
-                "msgspec",
-            )
-        )
     if orjson:
         dumps_str_indent_funcs.append(
             (
@@ -406,13 +397,6 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
             (
                 lambda x: pydantic_core.to_json(x, indent=2),
                 "pydantic_core",
-            )
-        )
-    if msgspec:
-        dumps_bytes_indent_funcs.append(
-            (
-                lambda x: msgspec.json.format(msgspec.json.encode(x), indent=2),
-                "msgspec",
             )
         )
     if orjson:
