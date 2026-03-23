@@ -142,8 +142,7 @@ jobs:
           files: "./artifacts/*"
           tag_name: "v${{ env.VERSION }}"
           name: Release ${{ env.VERSION }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.ACTION_GITHUB_TOKEN }}
+          token: ${{ secrets.ACTION_GITHUB_TOKEN }}
     
     - name: Publish package distributions to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
