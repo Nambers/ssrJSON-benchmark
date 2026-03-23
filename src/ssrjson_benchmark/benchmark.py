@@ -40,7 +40,7 @@ def _lib_available(name: str) -> bool:
 
 def _get_available_third_party_libs() -> list[str]:
     """Return list of available third-party JSON libraries (excluding stdlib json)."""
-    candidates = ["ssrjson", "ujson", "msgspec", "orjson"]
+    candidates = ["ujson", "msgspec", "orjson", "ssrjson"]
     return [lib for lib in candidates if _lib_available(lib)]
 
 
@@ -198,7 +198,7 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     if not available:
         raise RuntimeError(
             "No third-party JSON libraries are installed. "
-            "Install at least one of: ssrjson, ujson, msgspec, orjson"
+            "Install at least one of: ujson, msgspec, orjson, ssrjson"
         )
 
     libs = {}
@@ -216,24 +216,23 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
         return result
 
     # Helper references
-    ssrjson = libs.get("ssrjson")
     ujson = libs.get("ujson")
     msgspec = libs.get("msgspec")
     orjson = libs.get("orjson")
+    ssrjson = libs.get("ssrjson")
 
     groups = []
 
     # loads str
     loads_str_funcs = [(json.loads, "json")]
-    if ssrjson:
-        loads_str_funcs.append((ssrjson.loads, "ssrjson"))
     if ujson:
         loads_str_funcs.append((ujson.loads, "ujson"))
     if msgspec:
         loads_str_funcs.append((msgspec.json.decode, "msgspec"))
     if orjson:
         loads_str_funcs.append((orjson.loads, "orjson"))
-
+    if ssrjson:
+        loads_str_funcs.append((ssrjson.loads, "ssrjson"))
     groups.append(
         BenchmarkGroup(
             _benchmark_unicode_arg,
@@ -247,14 +246,14 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
 
     # loads bytes
     loads_bytes_funcs = [(json.loads, "json")]
-    if ssrjson:
-        loads_bytes_funcs.append((ssrjson.loads, "ssrjson"))
     if ujson:
         loads_bytes_funcs.append((ujson.loads, "ujson"))
     if msgspec:
         loads_bytes_funcs.append((msgspec.json.decode, "msgspec"))
     if orjson:
         loads_bytes_funcs.append((orjson.loads, "orjson"))
+    if ssrjson:
+        loads_bytes_funcs.append((ssrjson.loads, "ssrjson"))
     groups.append(
         BenchmarkGroup(
             _benchmark,
@@ -267,8 +266,6 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
 
     # dumps to str
     dumps_str_funcs = [(lambda x: json.dumps(x, ensure_ascii=False), "json")]
-    if ssrjson:
-        dumps_str_funcs.append((ssrjson.dumps, "ssrjson"))
     if ujson:
         dumps_str_funcs.append((lambda x: ujson.dumps(x, ensure_ascii=False), "ujson"))
     if msgspec:
@@ -277,7 +274,8 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
         )
     if orjson:
         dumps_str_funcs.append((lambda x: orjson.dumps(x).decode("utf-8"), "orjson"))
-
+    if ssrjson:
+        dumps_str_funcs.append((ssrjson.dumps, "ssrjson"))
     groups.append(
         BenchmarkGroup(
             _benchmark_invalidate_dump_cache,
@@ -292,8 +290,6 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     dumps_str_indent_funcs = [
         (lambda x: json.dumps(x, indent=2, ensure_ascii=False), "json")
     ]
-    if ssrjson:
-        dumps_str_indent_funcs.append((lambda x: ssrjson.dumps(x, indent=2), "ssrjson"))
     if ujson:
         dumps_str_indent_funcs.append(
             (lambda x: ujson.dumps(x, indent=2, ensure_ascii=False), "ujson")
@@ -314,6 +310,8 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 "orjson",
             )
         )
+    if ssrjson:
+        dumps_str_indent_funcs.append((lambda x: ssrjson.dumps(x, indent=2), "ssrjson"))
     groups.append(
         BenchmarkGroup(
             _benchmark_invalidate_dump_cache,
@@ -328,8 +326,6 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     dumps_bytes_funcs = [
         (lambda x: json.dumps(x, ensure_ascii=False).encode("utf-8"), "json")
     ]
-    if ssrjson:
-        dumps_bytes_funcs.append((ssrjson.dumps_to_bytes, "ssrjson"))
     if ujson:
         dumps_bytes_funcs.append(
             (lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"), "ujson")
@@ -338,7 +334,8 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
         dumps_bytes_funcs.append((msgspec.json.encode, "msgspec"))
     if orjson:
         dumps_bytes_funcs.append((orjson.dumps, "orjson"))
-
+    if ssrjson:
+        dumps_bytes_funcs.append((ssrjson.dumps_to_bytes, "ssrjson"))
     groups.append(
         BenchmarkGroup(
             _benchmark_invalidate_dump_cache,
@@ -353,10 +350,6 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     dumps_bytes_indent_funcs = [
         (lambda x: json.dumps(x, indent=2, ensure_ascii=False).encode("utf-8"), "json")
     ]
-    if ssrjson:
-        dumps_bytes_indent_funcs.append(
-            (lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson")
-        )
     if ujson:
         dumps_bytes_indent_funcs.append(
             (
@@ -378,6 +371,10 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
                 "orjson",
             )
         )
+    if ssrjson:
+        dumps_bytes_indent_funcs.append(
+            (lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson")
+        )
     groups.append(
         BenchmarkGroup(
             _benchmark_invalidate_dump_cache,
@@ -392,8 +389,6 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     dumps_bytes_cached_funcs = [
         (lambda x: json.dumps(x, ensure_ascii=False).encode("utf-8"), "json")
     ]
-    if ssrjson:
-        dumps_bytes_cached_funcs.append((ssrjson.dumps_to_bytes, "ssrjson"))
     if ujson:
         dumps_bytes_cached_funcs.append(
             (
@@ -405,6 +400,8 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
         dumps_bytes_cached_funcs.append((msgspec.json.encode, "msgspec"))
     if orjson:
         dumps_bytes_cached_funcs.append((orjson.dumps, "orjson"))
+    if ssrjson:
+        dumps_bytes_cached_funcs.append((ssrjson.dumps_to_bytes, "ssrjson"))
     groups.append(
         BenchmarkGroup(
             _benchmark_with_dump_cache,
@@ -420,13 +417,6 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
     dumps_bytes_wcache_funcs = [
         (lambda x: json.dumps(x, ensure_ascii=False).encode("utf-8"), "json")
     ]
-    if ssrjson:
-        dumps_bytes_wcache_funcs.append(
-            (
-                lambda x: ssrjson.dumps_to_bytes(x, is_write_cache=True),
-                "ssrjson",
-            )
-        )
     if ujson:
         dumps_bytes_wcache_funcs.append(
             (
@@ -438,6 +428,13 @@ def _get_benchmark_defs() -> tuple[BenchmarkGroup, ...]:
         dumps_bytes_wcache_funcs.append((msgspec.json.encode, "msgspec"))
     if orjson:
         dumps_bytes_wcache_funcs.append((orjson.dumps, "orjson"))
+    if ssrjson:
+        dumps_bytes_wcache_funcs.append(
+            (
+                lambda x: ssrjson.dumps_to_bytes(x, is_write_cache=True),
+                "ssrjson",
+            )
+        )
     groups.append(
         BenchmarkGroup(
             _benchmark_invalidate_dump_cache,
