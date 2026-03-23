@@ -22,35 +22,18 @@ Quick jump for
 ## Usage
 
 ```bash
-# you may need to install `svglib`, `reportlab` and `py-cpuinfo` as well
-pip install ssrjson-benchmark
-python -m ssrjson_benchmark
-```
-
-## Benchmark options
-
-Generate report with default config may take roughly 10 minutes. Additionally, we highly recommand to generate report with `--process-gigabytes 1 --bin-process-megabytes 32` in large memory modern computer to get more objective and accurate result (will take around 1 hour).
-
-```bash
-usage: python -m ssrjson_benchmark [-h] [-f FILE] [-d IN_DIR] [-m] [--no-pdf] [--process-gigabytes PROCESS_GIGABYTES]
-                   [--bin-process-megabytes BIN_PROCESS_MEGABYTES] [--out-dir OUT_DIR]
-
-options:
-  -h, --help            show this help message and exit
-  -f, --file FILE       Use a result JSON file generated in previous benchmark to print report. Will skip all tests.
-  -d, --in-dir IN_DIR   Benchmark JSON files directory. If not provided, use the files bundled in this package.
-  -m, --markdown        Generate Markdown report
-  --no-pdf              Don't generate PDF report
-  --process-gigabytes PROCESS_GIGABYTES
-                        Total gigabytes to process per test case, default 0.25 (float)
-  --bin-process-megabytes BIN_PROCESS_MEGABYTES
-                        Maximum megabytes to process per bin, default 8 (int)
-  --out-dir OUT_DIR     Output directory for reports
+pip install ssrjson-benchmark[all]  # Install all dependencies for benchmarking and printing PDF / Markdown
+# pip install ssrjson-benchmark[benchmark]  # Only install third-party JSON libraries for benchmarking
+# pip install ssrjson-benchmark[visual]  # Only install dependencies for generating PDF / Markdown report
+# pip install ssrjson-benchmark  # Clean install without any dependency
+python -m ssrjson_benchmark full  # Run benchmark + generate PDF report in one command
+# python -m ssrjson_benchmark benchmark  # Run benchmark and generate JSON benchmark result
+# python -m ssrjson_benchmark print  # Generate report from previously saved JSON benchmark result
 ```
 
 ## Notes
 
-* This repository conducts benchmarking using json, [ujson](https://github.com/ultrajson/ultrajson), [msgspec](https://github.com/jcrist/msgspec), [orjson](https://github.com/ijl/orjson), and [ssrJSON](https://github.com/Antares0982/ssrjson). The benchmark for `dumps_to_str` aims to produce a `str` object. If a JSON library's dumps-related interface only outputs a `bytes` object, it will be substituted with dumps followed by a single `decode("utf-8")` operation. Similarly, for the `dumps_to_bytes` test, if the JSON library's dumps-related interface only outputs a `str` object, it will be replaced with dumps followed by a single `encode("utf-8")` operation.
+* This repository conducts benchmarking using json, [ujson](https://github.com/ultrajson/ultrajson),[pydantic](https://github.com/pydantic/pydantic), [msgspec](https://github.com/jcrist/msgspec), [orjson](https://github.com/ijl/orjson), and [ssrJSON](https://github.com/Antares0982/ssrjson). The benchmark for `dumps_to_str` aims to produce a `str` object. If a JSON library's dumps-related interface only outputs a `bytes` object, it will be substituted with dumps followed by a single `decode("utf-8")` operation. Similarly, for the `dumps_to_bytes` test, if the JSON library's dumps-related interface only outputs a `str` object, it will be replaced with dumps followed by a single `encode("utf-8")` operation.
 * To ensure the accuracy of benchmark results, this repository differentiates between scenarios with and without UTF-8 caches when testing `dumps_to_bytes`. For `dumps_to_str` and `loads`, since these methods are unrelated to encoding `str` objects to UTF-8, the data sources do not involve any UTF-8 cache, and no distinction is made in their tests.
   * Cache writing of ssrJSON is disabled globally when running benchmark.
   * We use `orjson.dumps` to create UTF-8 cache for all benchmark targets.

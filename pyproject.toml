@@ -28,7 +28,7 @@ dependencies = []
 
 [project.optional-dependencies]
 benchmark = [
-    "ssrjson >= 0.0.10",
+    "ssrjson >= 0.0.16",
     "orjson",
     "msgspec",
     "ujson",
