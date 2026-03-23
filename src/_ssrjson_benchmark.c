@@ -54,7 +54,7 @@ inline LARGE_INTEGER _get_frequency(void) {
 usize perf_counter(void) {
     static LARGE_INTEGER *frequency = NULL;
     if (!frequency) {
-        frequency = (LARGE_INTEGER *)PyMem_MALLOC(sizeof(LARGE_INTEGER));
+        frequency = (LARGE_INTEGER *)malloc(sizeof(LARGE_INTEGER));
         if (!frequency) {
             return 0;
         }
@@ -75,6 +75,51 @@ usize perf_counter(void) {
 }
 
 #endif
+
+typedef struct UsizeArray {
+    usize *data;
+    usize size;
+} UsizeArray;
+
+typedef struct PyObjectArray {
+    PyObject **data;
+    usize size;
+} PyObjectArray;
+
+static UsizeArray _static_times_buf = {NULL, 0};
+static PyObjectArray _static_pyobj_buf = {NULL, 0};
+
+/**
+ * Ensure the static UsizeArray has at least `needed` capacity.
+ * Returns 0 on success, -1 on failure (sets PyErr_NoMemory).
+ */
+static int _ensure_usize_capacity(UsizeArray *arr, usize needed) {
+    if (arr->size >= needed) return 0;
+    usize *new_data = (usize *)PyMem_Realloc(arr->data, needed * sizeof(usize));
+    if (unlikely(!new_data)) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    arr->data = new_data;
+    arr->size = needed;
+    return 0;
+}
+
+/**
+ * Ensure the static PyObjectArray has at least `needed` capacity.
+ * Returns 0 on success, -1 on failure (sets PyErr_NoMemory).
+ */
+static int _ensure_pyobj_capacity(PyObjectArray *arr, usize needed) {
+    if (arr->size >= needed) return 0;
+    PyObject **new_data = (PyObject **)PyMem_Realloc(arr->data, needed * sizeof(PyObject *));
+    if (unlikely(!new_data)) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    arr->data = new_data;
+    arr->size = needed;
+    return 0;
+}
 
 typedef struct PyUnicodeCopyInfo {
     Py_ssize_t size;
@@ -161,7 +206,7 @@ PyObject *copy_unicode_list_invalidate_cache(PyObject *self, PyObject *args, PyO
 
 /**
  * Build a Python tuple (total, [t0, t1, ...]) from a C array of per-iteration times.
- * Frees times_buf on both success and failure.
+ * Does NOT free times_buf (caller manages the buffer lifetime).
  */
 static PyObject *_build_times_result(usize *times_buf, usize count, usize total) {
     PyObject *times_list = NULL;
@@ -175,8 +220,6 @@ static PyObject *_build_times_result(usize *times_buf, usize count, usize total)
         if (unlikely(!val)) goto fail;
         PyList_SET_ITEM(times_list, i, val);
     }
-    PyMem_FREE(times_buf);
-    times_buf = NULL;
 
     total_obj = PyLong_FromUnsignedLongLong(total);
     if (unlikely(!total_obj)) goto fail;
@@ -187,7 +230,6 @@ static PyObject *_build_times_result(usize *times_buf, usize count, usize total)
     return ret;
 
 fail:
-    PyMem_FREE(times_buf);
     Py_XDECREF(times_list);
     Py_XDECREF(total_obj);
     return NULL;
@@ -212,19 +254,14 @@ PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
         PyErr_SetString(PyExc_TypeError, "Third argument must be tuple");
         return NULL;
     }
-    // Allocate C array for per-iteration times
-    usize *times_buf = (usize *)PyMem_MALLOC(repeat * sizeof(usize));
-    if (unlikely(!times_buf)) {
-        PyErr_NoMemory();
-        return NULL;
-    }
+    if (_ensure_usize_capacity(&_static_times_buf, repeat)) return NULL;
+    usize *times_buf = _static_times_buf.data;
     usize total = 0;
     for (usize i = 0; i < repeat; i++) {
         usize start = perf_counter();
         PyObject *result = PyObject_Call(callable, call_args, NULL);
         usize end = perf_counter();
         if (unlikely(!result)) {
-            PyMem_FREE(times_buf);
             if (!PyErr_Occurred()) {
                 PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
             }
@@ -245,8 +282,6 @@ PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
  */
 static PyObject *_benchmark_warmup_repeat(PyObject *callable, usize repeat,
                                           PyObject *call_args) {
-    usize *times_buf = NULL;
-
     // Warmup
     PyObject *warmup = PyObject_Call(callable, call_args, NULL);
     if (unlikely(!warmup)) {
@@ -256,18 +291,14 @@ static PyObject *_benchmark_warmup_repeat(PyObject *callable, usize repeat,
     }
     Py_DECREF(warmup);
 
-    times_buf = (usize *)PyMem_MALLOC(repeat * sizeof(usize));
-    if (unlikely(!times_buf)) {
-        PyErr_NoMemory();
-        return NULL;
-    }
+    if (_ensure_usize_capacity(&_static_times_buf, repeat)) return NULL;
+    usize *times_buf = _static_times_buf.data;
     usize total = 0;
     for (usize i = 0; i < repeat; i++) {
         usize start = perf_counter();
         PyObject *result = PyObject_Call(callable, call_args, NULL);
         usize end = perf_counter();
         if (unlikely(!result)) {
-            PyMem_FREE(times_buf);
             if (!PyErr_Occurred())
                 PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
             return NULL;
@@ -350,11 +381,11 @@ static int _benchmark_bin(PyObject *callable, PyObject **items, usize bin_size,
 }
 
 /**
- * Helper to PyMem_FREE a partially-filled array of PyObjects.
+ * Helper to Py_DECREF a partially-filled array of PyObjects.
+ * Does NOT free the array itself (caller manages the buffer lifetime).
  */
-static void _free_pyobj_array(PyObject **arr, usize count) {
+static void _decref_pyobj_array(PyObject **arr, usize count) {
     for (usize i = 0; i < count; i++) Py_DECREF(arr[i]);
-    PyMem_FREE(arr);
 }
 
 /**
@@ -384,15 +415,14 @@ PyObject *benchmark_unicode_invalidate_cache(PyObject *self, PyObject *args,
         return NULL;
     }
 
-    usize *times_buf = NULL;
-    PyObject **copies = NULL;
     usize copies_count = 0;
 
-    times_buf = (usize *)PyMem_MALLOC(repeat * sizeof(usize));
-    if (unlikely(!times_buf)) {
-        PyErr_NoMemory();
-        return NULL;
-    }
+    if (_ensure_usize_capacity(&_static_times_buf, repeat)) return NULL;
+    usize *times_buf = _static_times_buf.data;
+    // The pyobj buffer needs at most (times_per_bin + 1) entries
+    if (_ensure_pyobj_capacity(&_static_pyobj_buf, times_per_bin + 1)) return NULL;
+    PyObject **copies = _static_pyobj_buf.data;
+
     PyUnicodeCopyInfo unicode_copy_info;
     unicode_copy_info.valid = false;
     usize times_left = repeat;
@@ -403,11 +433,6 @@ PyObject *benchmark_unicode_invalidate_cache(PyObject *self, PyObject *args,
         times_left -= cur_bin_size;
         usize list_size = cur_bin_size + 1;
         copies_count = 0;
-        copies = (PyObject **)PyMem_MALLOC(list_size * sizeof(PyObject *));
-        if (unlikely(!copies)) {
-            PyErr_NoMemory();
-            goto fail;
-        }
         for (usize i = 0; i < list_size; i++) {
             copies[i] = _copy_unicode(unicode, &unicode_copy_info);
             if (unlikely(!copies[i])) goto fail;
@@ -415,15 +440,13 @@ PyObject *benchmark_unicode_invalidate_cache(PyObject *self, PyObject *args,
         }
         if (_benchmark_bin(callable, copies, cur_bin_size, times_buf, &buf_idx, &total))
             goto fail;
-        _free_pyobj_array(copies, copies_count);
-        copies = NULL;
+        _decref_pyobj_array(copies, copies_count);
         copies_count = 0;
     }
     return _build_times_result(times_buf, repeat, total);
 
 fail:
-    _free_pyobj_array(copies, copies_count);
-    PyMem_FREE(times_buf);
+    _decref_pyobj_array(copies, copies_count);
     return NULL;
 }
 
@@ -455,9 +478,7 @@ PyObject *benchmark_invalidate_dump_cache(PyObject *self, PyObject *args,
         return NULL;
     }
 
-    usize *times_buf = NULL;
     PyObject *loads_args = NULL;
-    PyObject **objects = NULL;
     usize objects_count = 0;
 
     loads_args = PyTuple_New(1);
@@ -465,11 +486,12 @@ PyObject *benchmark_invalidate_dump_cache(PyObject *self, PyObject *args,
     Py_INCREF(raw_bytes);
     PyTuple_SET_ITEM(loads_args, 0, raw_bytes);
 
-    times_buf = (usize *)PyMem_MALLOC(repeat * sizeof(usize));
-    if (unlikely(!times_buf)) {
-        PyErr_NoMemory();
-        goto fail;
-    }
+    if (_ensure_usize_capacity(&_static_times_buf, repeat)) goto fail;
+    usize *times_buf = _static_times_buf.data;
+    // The pyobj buffer needs at most (times_per_bin + 1) entries
+    if (_ensure_pyobj_capacity(&_static_pyobj_buf, times_per_bin + 1)) goto fail;
+    PyObject **objects = _static_pyobj_buf.data;
+
     usize times_left = repeat;
     usize total = 0;
     usize buf_idx = 0;
@@ -478,11 +500,6 @@ PyObject *benchmark_invalidate_dump_cache(PyObject *self, PyObject *args,
         times_left -= cur_bin_size;
         usize list_size = cur_bin_size + 1;
         objects_count = 0;
-        objects = (PyObject **)PyMem_MALLOC(list_size * sizeof(PyObject *));
-        if (unlikely(!objects)) {
-            PyErr_NoMemory();
-            goto fail;
-        }
         for (usize i = 0; i < list_size; i++) {
             objects[i] = PyObject_Call(loads_func, loads_args, NULL);
             if (unlikely(!objects[i])) goto fail;
@@ -490,17 +507,15 @@ PyObject *benchmark_invalidate_dump_cache(PyObject *self, PyObject *args,
         }
         if (_benchmark_bin(callable, objects, cur_bin_size, times_buf, &buf_idx, &total))
             goto fail;
-        _free_pyobj_array(objects, objects_count);
-        objects = NULL;
+        _decref_pyobj_array(objects, objects_count);
         objects_count = 0;
     }
     Py_DECREF(loads_args);
     return _build_times_result(times_buf, repeat, total);
 
 fail:
-    _free_pyobj_array(objects, objects_count);
+    _decref_pyobj_array(_static_pyobj_buf.data, objects_count);
     Py_XDECREF(loads_args);
-    PyMem_FREE(times_buf);
     return NULL;
 }
 
