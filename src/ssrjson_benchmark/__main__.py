@@ -330,13 +330,19 @@ def main():
         action="store_true",
     )
 
+    parser.epilog = "\n".join(
+        [
+            "Subcommand usage:",
+            command_parsers["benchmark"].format_usage().strip(),
+            command_parsers["print"].format_usage().strip(),
+            command_parsers["full"].format_usage().strip(),
+        ]
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
         parser.print_help()
-        print("\nSubcommand usage:\n")
-        for name in ("benchmark", "print", "full"):
-            print(command_parsers[name].format_usage().strip())
         return 1
 
     if args.command == "benchmark":
