@@ -9,5 +9,6 @@ pypkgs: with pypkgs; [
   pip
   ujson
   msgspec
+  pydantic
   ssrjson
 ]
