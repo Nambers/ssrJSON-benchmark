@@ -147,15 +147,15 @@ def _cmd_print(args) -> int:
     if out_dir is None:
         out_dir = os.path.dirname(os.path.abspath(args.result_json))
 
-    pdf_only = not args.no_pdf and not args.markdown
-    md_only = args.no_pdf and args.markdown
-    both = not args.no_pdf and args.markdown
+    pdf_only = not args.no_pdf and not args.gen_markdown
+    md_only = args.no_pdf and args.gen_markdown
+    both = not args.no_pdf and args.gen_markdown
 
-    if args.no_pdf and not args.markdown:
-        print("Nothing to do. Use --markdown or remove --no-pdf.")
+    if args.no_pdf and not args.gen_markdown:
+        print("Nothing to do. Use --gen-markdown or remove --no-pdf.")
         return 1
 
-    if args.markdown:
+    if args.gen_markdown:
         md_path = generate_report_markdown(result, file, out_dir)
         if args.output and md_only:
             if args.output != md_path:
@@ -186,7 +186,7 @@ def _cmd_full(args) -> int:
     _check_visual_deps()
 
     do_pdf = not args.no_pdf
-    do_md = args.markdown
+    do_md = args.gen_markdown
     if not do_pdf and not do_md:
         # Default: generate both when neither flag is given
         do_pdf = True
@@ -253,14 +253,17 @@ def main():
     parser = argparse.ArgumentParser(
         prog="ssrjson_benchmark",
         description="ssrJSON benchmark tool",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command")
+    command_parsers = {}
 
     # --- benchmark subcommand ---
     bench_parser = subparsers.add_parser(
         "benchmark",
         help="Run benchmarks and save result to a JSON file.",
     )
+    command_parsers["benchmark"] = bench_parser
     _add_benchmark_args(bench_parser)
 
     # --- print subcommand ---
@@ -268,6 +271,7 @@ def main():
         "print",
         help="Generate PDF/Markdown report from a benchmark result JSON file.",
     )
+    command_parsers["print"] = print_parser
     print_parser.add_argument(
         "result_json",
         help="Path to a benchmark result JSON file.",
@@ -281,9 +285,8 @@ def main():
         default=None,
     )
     print_parser.add_argument(
-        "-m",
-        "--markdown",
-        help="Generate Markdown report",
+        "--gen-markdown",
+        help="Also generate a Markdown report.",
         action="store_true",
     )
     print_parser.add_argument(
@@ -301,13 +304,13 @@ def main():
     # --- full subcommand ---
     full_parser = subparsers.add_parser(
         "full",
-        help="Run benchmarks, generate reports (PDF + Markdown), then delete the intermediate JSON.",
+        help="Run benchmarks, generate reports (PDF/Markdown), then delete the intermediate JSON.",
     )
+    command_parsers["full"] = full_parser
     _add_benchmark_args(full_parser)
     full_parser.add_argument(
-        "-m",
-        "--markdown",
-        help="Generate Markdown report",
+        "--gen-markdown",
+        help="Also generate a Markdown report.",
         action="store_true",
     )
     full_parser.add_argument(
@@ -331,6 +334,9 @@ def main():
 
     if args.command is None:
         parser.print_help()
+        print("\nSubcommand usage:\n")
+        for name in ("benchmark", "print", "full"):
+            print(command_parsers[name].format_usage().strip())
         return 1
 
     if args.command == "benchmark":

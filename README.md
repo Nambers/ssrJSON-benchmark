@@ -26,9 +26,9 @@ pip install ssrjson-benchmark[all]  # Install all dependencies for benchmarking 
 # pip install ssrjson-benchmark[benchmark]  # Only install third-party JSON libraries for benchmarking
 # pip install ssrjson-benchmark[visual]  # Only install dependencies for generating PDF / Markdown report
 # pip install ssrjson-benchmark  # Clean install without any dependency
-python -m ssrjson_benchmark full  # Run benchmark + generate PDF report in one command
-# python -m ssrjson_benchmark benchmark  # Run benchmark and generate JSON benchmark result
-# python -m ssrjson_benchmark print  # Generate report from previously saved JSON benchmark result
+python -m ssrjson_benchmark full -h # Run benchmark + generate PDF report in one command
+# python -m ssrjson_benchmark benchmark -h  # Run benchmark and generate JSON benchmark result
+# python -m ssrjson_benchmark print -h # Generate report from previously saved JSON benchmark result
 ```
 
 ## Notes
