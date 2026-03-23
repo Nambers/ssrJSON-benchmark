@@ -1,16 +1,16 @@
 {
   pkgs,
-  python3Packages,
+  python,
   cmake,
-  ssrjson,
+  callPackage,
   ...
 }:
 let
-  requirements = (pkgs.callPackage ./py_requirements.nix { inherit ssrjson; }) python3Packages;
-  findVersion = pkgs.callPackage ./find_version.nix { };
+  findVersion = callPackage ./find_version.nix { };
   version = findVersion ./../../pyproject.toml;
+  pypkgs = python.pkgs;
 in
-python3Packages.buildPythonPackage {
+pypkgs.buildPythonPackage {
   pname = "ssrjson-benchmark";
   src = builtins.path {
     path = ./../..;
@@ -21,10 +21,8 @@ python3Packages.buildPythonPackage {
 
   nativeBuildInputs = [
     cmake
-    python3Packages.setuptools
+    pypkgs.setuptools
   ];
-
-  dependencies = requirements;
 
   preBuild = ''
     cd ..

@@ -2,28 +2,33 @@
   description = "A simple flake for a simple python environment";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    ssrjson-nix-dev = {
+      url = "github:antares0982/ssrjson-nix-dev";
+    };
     ssrjson_ = {
       url = "github:antares0982/ssrjson";
-      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.ssrjson-nix-dev.follows = "ssrjson-nix-dev";
     };
   };
 
   outputs =
     {
       self,
-      nixpkgs,
+      ssrjson-nix-dev,
       ssrjson_,
       ...
     }:
     let
+      nixpkgs = ssrjson-nix-dev.ssrjson-nixpkgs;
+      py-minor-ver = 14;
+      py-minor-ver-str = builtins.toString py-minor-ver;
       forAllSystems =
         function:
         nixpkgs.lib.genAttrs
           [
             "x86_64-linux"
             "aarch64-linux"
-            "x86_64-darwin"
             "aarch64-darwin"
           ]
           (
@@ -39,22 +44,25 @@
       devShells = forAllSystems (
         pkgs:
         let
-          ssrjson = ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}.ssrjson-pypackage-py313;
+          ssrjson = ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}.ssrjson-pypackage-py314;
         in
         {
           default = pkgs.callPackage ./dev_tools/nix_files/shell.nix {
             persist = true;
-            inherit ssrjson;
+            inherit ssrjson py-minor-ver-str;
           };
         }
       );
       packages = forAllSystems (
         pkgs:
         let
-          ssrjson = ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}.ssrjson-pypackage-py313;
+          ssrjson =
+            ssrjson_.packages.${pkgs.stdenv.hostPlatform.system}."ssrjson-pypackage-py3${py-minor-ver-str}";
         in
         rec {
-          default = pkgs.callPackage ./dev_tools/nix_files/package.nix { inherit ssrjson; };
+          default = pkgs.callPackage ./dev_tools/nix_files/package.nix {
+            python = pkgs.python314;
+          };
           inherit ssrjson;
         }
       );

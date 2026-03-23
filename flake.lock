@@ -2,11 +2,11 @@
   "nodes": {
     "nixpkgs": {
       "locked": {
-        "lastModified": 1767379071,
-        "narHash": "sha256-EgE0pxsrW9jp9YFMkHL9JMXxcqi/OoumPJYwf+Okucw=",
+        "lastModified": 1772963539,
+        "narHash": "sha256-9jVDGZnvCckTGdYT53d/EfznygLskyLQXYwJLKMPsZs=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "fb7944c166a3b630f177938e478f0378e64ce108",
+        "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
         "type": "github"
       },
       "original": {
@@ -18,11 +18,11 @@
     },
     "nixpkgs-legacy": {
       "locked": {
-        "lastModified": 1764836381,
-        "narHash": "sha256-8jemYbbW9EBttQKHep7Rj8kzXaxsrk/lACdXA2DN5Xk=",
+        "lastModified": 1767313136,
+        "narHash": "sha256-16KkgfdYqjaeRGBaYsNrhPRRENs0qzkQVUooNHtoy2w=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "ff06bd3398fb1bea6c937039ece7e7c8aa396ebf",
+        "rev": "ac62194c3917d5f474c1a844b6fd6da2db95077d",
         "type": "github"
       },
       "original": {
@@ -34,23 +34,41 @@
     },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs",
+        "ssrjson-nix-dev": "ssrjson-nix-dev",
         "ssrjson_": "ssrjson_"
+      }
+    },
+    "ssrjson-nix-dev": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "nixpkgs-legacy": "nixpkgs-legacy"
+      },
+      "locked": {
+        "lastModified": 1774188653,
+        "narHash": "sha256-ITFOkdyx3y4FWWnTM6EBuxAMqleprle9kBrhAPDXxN0=",
+        "owner": "antares0982",
+        "repo": "ssrjson-nix-dev",
+        "rev": "431a7e23e62a0664895460911f0276d6d17be366",
+        "type": "github"
+      },
+      "original": {
+        "owner": "antares0982",
+        "repo": "ssrjson-nix-dev",
+        "type": "github"
       }
     },
     "ssrjson_": {
       "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "nixpkgs-legacy": "nixpkgs-legacy"
+        "ssrjson-nix-dev": [
+          "ssrjson-nix-dev"
+        ]
       },
       "locked": {
-        "lastModified": 1767627431,
-        "narHash": "sha256-Fwg+htOOOBrTinbyuqMQ7DiqagcRO8JjnOSRfvbVgGg=",
+        "lastModified": 1774189074,
+        "narHash": "sha256-Nz5FXSsIGcFZWXPPVxgRvrmK62xKAl4Fm+Gs6MUk6ts=",
         "owner": "antares0982",
         "repo": "ssrjson",
-        "rev": "49b74193bb6c962fd2ab06a1334f1cb3582ad0b3",
+        "rev": "40470b7d176a3b21a706696808fd0db786a2e3ed",
         "type": "github"
       },
       "original": {

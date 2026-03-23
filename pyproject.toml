@@ -24,7 +24,10 @@ classifiers = [
 ]
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = [
+dependencies = []
+
+[project.optional-dependencies]
+benchmark = [
     "ssrjson >= 0.0.10",
     "orjson",
     "msgspec",
@@ -32,12 +35,13 @@ dependencies = [
     "psutil",
     "py-cpuinfo",
 ]
-
-[project.optional-dependencies]
 visual = [
     "matplotlib",
     "svglib",
     "reportlab",
+]
+all = [
+    "ssrjson-benchmark[benchmark,visual]",
 ]
 
 [project.urls]
