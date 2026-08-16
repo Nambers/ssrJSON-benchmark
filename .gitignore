@@ -1,3 +1,5 @@
+/.claude
+/.opencode
 /benchmark_result_*
 /*.pdf
 /.nix-pyenv
