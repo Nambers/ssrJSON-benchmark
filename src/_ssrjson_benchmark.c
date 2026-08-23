@@ -45,24 +45,22 @@ typedef unsigned long long usize;
 #if defined(_WIN32) || defined(_WIN64)
 #    include <windows.h>
 
-inline LARGE_INTEGER _get_frequency(void) {
-    LARGE_INTEGER frequency;
-    QueryPerformanceFrequency(&frequency);
-    return frequency;
-}
-
 usize perf_counter(void) {
-    static LARGE_INTEGER *frequency = NULL;
-    if (!frequency) {
-        frequency = (LARGE_INTEGER *)malloc(sizeof(LARGE_INTEGER));
-        if (!frequency) {
-            return 0;
-        }
-        *frequency = _get_frequency();
+    static LONGLONG frequency = 0;
+    if (frequency == 0) {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        frequency = f.QuadPart;
     }
     LARGE_INTEGER counter;
     QueryPerformanceCounter(&counter);
-    return (usize)((counter.QuadPart * 1000000000LL) / frequency->QuadPart);
+    /* Split into whole seconds and remainder before scaling to nanoseconds.
+       Scaling the raw counter first overflows int64 after ~15 minutes of
+       uptime, and the subsequent division does not survive the wraparound. */
+    LONGLONG seconds = counter.QuadPart / frequency;
+    LONGLONG rest = counter.QuadPart % frequency;
+    return (usize)seconds * 1000000000ULL +
+           (usize)((rest * 1000000000LL) / frequency);
 }
 
 #else
@@ -99,89 +97,6 @@ static int _ensure_usize_capacity(UsizeArray *arr, usize needed) {
     return 0;
 }
 
-typedef struct PyUnicodeCopyInfo {
-    Py_ssize_t size;
-    int kind;
-    Py_UCS4 max_char;
-    bool valid;
-} PyUnicodeCopyInfo;
-
-PyObject *_copy_unicode(PyObject *unicode, PyUnicodeCopyInfo *unicode_copy_info) {
-    if (!unicode_copy_info->valid) {
-        // create copy of unicode object.
-        int kind = PyUnicode_KIND(unicode);
-        Py_UCS4 max_char;
-        if (kind == 4) {
-            max_char = 0x10ffff;
-        } else if (kind == 2) {
-            max_char = 0xffff;
-        } else if (PyUnicode_IS_ASCII(unicode)) {
-            max_char = 0x7f;
-        } else {
-            max_char = 0xff;
-        }
-        //
-        unicode_copy_info->size = PyUnicode_GET_LENGTH(unicode);
-        unicode_copy_info->kind = kind;
-        unicode_copy_info->max_char = max_char;
-        unicode_copy_info->valid = true;
-    }
-
-    PyObject *unicode_copy = PyUnicode_New(unicode_copy_info->size, unicode_copy_info->max_char);
-    if (!unicode_copy) return NULL;
-    memcpy(PyUnicode_DATA(unicode_copy), PyUnicode_DATA(unicode),
-           unicode_copy_info->size * unicode_copy_info->kind);
-    return unicode_copy;
-}
-
-PyObject *_parse_additional_args(PyObject *additional_args) {
-    Py_ssize_t new_args_count = 1;
-    if (additional_args) {
-        new_args_count += PyTuple_GET_SIZE(additional_args);
-    }
-    PyObject *new_args = PyTuple_New(new_args_count);
-    if (!new_args) {
-        return NULL;
-    }
-    if (additional_args) {
-        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(additional_args); i++) {
-            PyObject *item = PyTuple_GET_ITEM(additional_args, i);
-            Py_INCREF(item);
-            PyTuple_SET_ITEM(new_args, i + 1, item);
-        }
-    }
-    return new_args;
-}
-
-PyObject *copy_unicode_list_invalidate_cache(PyObject *self, PyObject *args, PyObject *kwargs) {
-    static const char *kwlist[] = {"s", "size", NULL};
-    PyObject *s;
-    usize size;
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OK", (char **)kwlist, &s, &size)) {
-        PyErr_SetString(PyExc_TypeError, "Invalid argument");
-        return NULL;
-    }
-    if (!PyUnicode_CheckExact(s)) {
-        PyErr_SetString(PyExc_TypeError, "First argument must be str, not other types or subclass of str");
-        return NULL;
-    }
-    PyObject *ret = PyList_New(size);
-    if (!ret) {
-        return NULL;
-    }
-    PyUnicodeCopyInfo unicode_copy_info;
-    unicode_copy_info.valid = false;
-    for (usize i = 0; i < size; i++) {
-        PyObject *s_copy = _copy_unicode(s, &unicode_copy_info);
-        if (!s_copy) {
-            Py_DECREF(ret);
-            return NULL;
-        }
-        PyList_SET_ITEM(ret, i, s_copy);
-    }
-    return ret;
-}
-
 /**
  * Build a Python tuple (total, [t0, t1, ...]) from a C array of per-iteration times.
  * Does NOT free times_buf (caller manages the buffer lifetime).
@@ -213,252 +128,135 @@ fail:
     return NULL;
 }
 
-PyObject *run_object_accumulate_benchmark(PyObject *self, PyObject *args,
-                                          PyObject *kwargs) {
-    PyObject *callable;
-    usize repeat;
-    PyObject *call_args;
-    static const char *kwlist[] = {"func", "repeat", "args", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKO", (char **)kwlist,
-                                     &callable, &repeat, &call_args)) {
-        PyErr_SetString(PyExc_TypeError, "Invalid argument");
-        return NULL;
-    }
-    if (!PyCallable_Check(callable)) {
-        PyErr_SetString(PyExc_TypeError, "First argument must be callable");
-        return NULL;
-    }
-    if (!PyTuple_Check(call_args)) {
-        PyErr_SetString(PyExc_TypeError, "Third argument must be tuple");
-        return NULL;
-    }
-    if (_ensure_usize_capacity(&_static_times_buf, repeat)) return NULL;
-    usize *times_buf = _static_times_buf.data;
-    usize total = 0;
-    for (usize i = 0; i < repeat; i++) {
-        usize start = perf_counter();
-        PyObject *result = PyObject_Call(callable, call_args, NULL);
-        usize end = perf_counter();
-        if (unlikely(!result)) {
-            if (!PyErr_Occurred()) {
-                PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
-            }
-            return NULL;
-        }
-        Py_DECREF(result);
-        usize elapsed = end - start;
-        times_buf[i] = elapsed;
-        total += elapsed;
-    }
-    return _build_times_result(times_buf, repeat, total);
-}
-
 /**
- * Warmup 1 call, then time `repeat` calls.
- * Returns (total_ns, [per_iter_ns]).
- * Shared implementation for benchmark_bytes_load and benchmark_with_dump_cache.
- */
-static PyObject *_benchmark_warmup_repeat(PyObject *callable, usize repeat,
-                                          PyObject *call_args) {
-    // Warmup
-    PyObject *warmup = PyObject_Call(callable, call_args, NULL);
-    if (unlikely(!warmup)) {
-        if (!PyErr_Occurred())
-            PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
-        return NULL;
-    }
-    Py_DECREF(warmup);
-
-    if (_ensure_usize_capacity(&_static_times_buf, repeat)) return NULL;
-    usize *times_buf = _static_times_buf.data;
-    usize total = 0;
-    for (usize i = 0; i < repeat; i++) {
-        usize start = perf_counter();
-        PyObject *result = PyObject_Call(callable, call_args, NULL);
-        usize end = perf_counter();
-        if (unlikely(!result)) {
-            if (!PyErr_Occurred())
-                PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
-            return NULL;
-        }
-        Py_DECREF(result);
-        usize elapsed = end - start;
-        times_buf[i] = elapsed;
-        total += elapsed;
-    }
-    return _build_times_result(times_buf, repeat, total);
-}
-
-/**
- * benchmark_bytes_load(func, repeat, args)
- */
-PyObject *benchmark_bytes_load(PyObject *self, PyObject *args,
-                               PyObject *kwargs) {
-    PyObject *callable;
-    usize repeat;
-    PyObject *call_args;
-    static const char *kwlist[] = {"func", "repeat", "args", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKO", (char **)kwlist,
-                                     &callable, &repeat, &call_args)) {
-        PyErr_SetString(PyExc_TypeError, "Invalid argument");
-        return NULL;
-    }
-    if (!PyCallable_Check(callable)) {
-        PyErr_SetString(PyExc_TypeError, "First argument must be callable");
-        return NULL;
-    }
-    if (!PyTuple_Check(call_args)) {
-        PyErr_SetString(PyExc_TypeError, "Third argument must be tuple");
-        return NULL;
-    }
-    return _benchmark_warmup_repeat(callable, repeat, call_args);
-}
-
-/**
- * Warmup with items[0], then time callable(items[1..bin_size]) one by one.
- * Writes elapsed times into times_buf[*buf_idx ..] and accumulates into *total.
+ * Replace ring[slot] with a freshly built object. PyList_SetItem steals the new
+ * reference and drops the previous one, so the old copy is released here.
  * Returns 0 on success, -1 on failure (Python exception already set).
- * Does NOT PyMem_FREE items — caller is responsible.
  */
-static int _benchmark_bin(PyObject *callable, PyObject **items, usize bin_size,
-                          usize *times_buf, usize *buf_idx, usize *total) {
-    // Warmup with items[0]
-    PyObject *warmup_args = PyTuple_New(1);
-    if (unlikely(!warmup_args)) return -1;
-    Py_INCREF(items[0]);
-    PyTuple_SET_ITEM(warmup_args, 0, items[0]);
-    PyObject *warmup = PyObject_Call(callable, warmup_args, NULL);
-    Py_DECREF(warmup_args);
-    if (unlikely(!warmup)) {
+static int _ring_refill(PyObject *ring, Py_ssize_t slot, PyObject *factory,
+                        PyObject *factory_arg) {
+    PyObject *fresh = PyObject_CallOneArg(factory, factory_arg);
+    if (unlikely(!fresh)) {
         if (!PyErr_Occurred())
-            PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
+            PyErr_SetString(PyExc_RuntimeError, "Failed to call factory");
         return -1;
     }
-    Py_DECREF(warmup);
-    // Measure items[1..bin_size]
-    for (usize i = 1; i <= bin_size; i++) {
-        PyObject *iter_args = PyTuple_New(1);
-        if (unlikely(!iter_args)) return -1;
-        Py_INCREF(items[i]);
-        PyTuple_SET_ITEM(iter_args, 0, items[i]);
-        usize start = perf_counter();
-        PyObject *result = PyObject_Call(callable, iter_args, NULL);
-        usize end = perf_counter();
-        Py_DECREF(iter_args);
-        if (unlikely(!result)) {
-            if (!PyErr_Occurred())
-                PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
-            return -1;
-        }
-        Py_DECREF(result);
-        usize elapsed = end - start;
-        times_buf[(*buf_idx)++] = elapsed;
-        *total += elapsed;
-    }
+    if (unlikely(PyList_SetItem(ring, slot, fresh) < 0)) return -1;
     return 0;
 }
 
 /**
- * benchmark_bin(func, items)
- *
- * Warmup with items[0], then time func(items[i]) for i in 1..len(items)-1.
- * Returns (total_ns, [per_iter_ns]).
+ * Call func(ring[slot]) once. When `elapsed` is non-NULL the call is timed and
+ * the duration in nanoseconds is stored there. Returns 0 on success, -1 on
+ * failure (Python exception already set).
  */
-PyObject *benchmark_bin_py(PyObject *self, PyObject *args, PyObject *kwargs) {
-    PyObject *callable;
-    PyObject *items_list;
-    static const char *kwlist[] = {"func", "items", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO", (char **)kwlist,
-                                     &callable, &items_list)) {
-        PyErr_SetString(PyExc_TypeError, "Invalid argument");
-        return NULL;
+static int _call_slot(PyObject *func, PyObject *ring, Py_ssize_t slot,
+                      usize *elapsed) {
+    /* Borrowed -> owned, so the item cannot vanish underneath the call.
+       Both the incref and the decref sit outside the timed window. */
+    PyObject *item = PyList_GET_ITEM(ring, slot);
+    Py_INCREF(item);
+    usize start = 0, end = 0;
+    if (elapsed) start = perf_counter();
+    PyObject *result = PyObject_CallOneArg(func, item);
+    if (elapsed) end = perf_counter();
+    Py_DECREF(item);
+    if (unlikely(!result)) {
+        if (!PyErr_Occurred())
+            PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
+        return -1;
     }
-    if (!PyCallable_Check(callable)) {
-        PyErr_SetString(PyExc_TypeError, "func must be callable");
-        return NULL;
-    }
-    if (!PyList_Check(items_list)) {
-        PyErr_SetString(PyExc_TypeError, "items must be a list");
-        return NULL;
-    }
-    Py_ssize_t list_size = PyList_GET_SIZE(items_list);
-    if (list_size < 2) {
-        PyErr_SetString(PyExc_ValueError, "items must have at least 2 elements");
-        return NULL;
-    }
-    usize bin_size = (usize)(list_size - 1);
-
-    if (_ensure_usize_capacity(&_static_times_buf, bin_size)) return NULL;
-    usize *times_buf = _static_times_buf.data;
-
-    // Use list items directly as a PyObject** array
-    PyObject **items = &PyList_GET_ITEM(items_list, 0);
-    usize total = 0;
-    usize buf_idx = 0;
-    if (_benchmark_bin(callable, items, bin_size, times_buf, &buf_idx, &total))
-        return NULL;
-    return _build_times_result(times_buf, bin_size, total);
+    Py_DECREF(result);
+    if (elapsed) *elapsed = end - start;
+    return 0;
 }
 
 /**
- * benchmark_with_dump_cache(func, repeat, args)
+ * benchmark_run(func, ring, repeat, warmup, factory=None, factory_arg=None,
+ *               start_slot=0)
+ *
+ * Ring-buffer benchmark. Iteration i measures func(ring[(start_slot + i) % K]);
+ * when a factory is supplied that slot is immediately rebuilt (untimed), so
+ * every measured object was built exactly K iterations earlier. K == 1
+ * degenerates to "build one, measure, free" (hot); K > 1 holds a working set of
+ * K live copies (cold). factory=None reuses the ring as-is and allocates
+ * nothing.
+ *
+ * start_slot lets a caller split one measurement into several rounds (to
+ * interleave libraries) while keeping the rotation continuous: pass the total
+ * number of calls already made against this ring.
+ *
+ * Returns (total_ns, [per_iter_ns]).
  */
-PyObject *benchmark_with_dump_cache(PyObject *self, PyObject *args,
-                                    PyObject *kwargs) {
-    PyObject *callable;
+PyObject *benchmark_run(PyObject *self, PyObject *args, PyObject *kwargs) {
+    PyObject *func;
+    PyObject *ring;
     usize repeat;
-    PyObject *call_args;
-    static const char *kwlist[] = {"func", "repeat", "args", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKO", (char **)kwlist,
-                                     &callable, &repeat, &call_args)) {
-        PyErr_SetString(PyExc_TypeError, "Invalid argument");
+    usize warmup;
+    PyObject *factory = Py_None;
+    PyObject *factory_arg = Py_None;
+    usize start_slot = 0;
+    static const char *kwlist[] = {"func",        "ring",    "repeat",
+                                   "warmup",      "factory", "factory_arg",
+                                   "start_slot",  NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOKK|OOK", (char **)kwlist,
+                                     &func, &ring, &repeat, &warmup, &factory,
+                                     &factory_arg, &start_slot)) {
         return NULL;
     }
-    if (!PyCallable_Check(callable)) {
-        PyErr_SetString(PyExc_TypeError, "First argument must be callable");
+    if (!PyCallable_Check(func)) {
+        PyErr_SetString(PyExc_TypeError, "func must be callable");
         return NULL;
     }
-    if (!PyTuple_Check(call_args)) {
-        PyErr_SetString(PyExc_TypeError, "Third argument must be tuple");
+    if (!PyList_Check(ring)) {
+        PyErr_SetString(PyExc_TypeError, "ring must be a list");
         return NULL;
     }
-    return _benchmark_warmup_repeat(callable, repeat, call_args);
-}
+    Py_ssize_t ring_size = PyList_GET_SIZE(ring);
+    if (ring_size < 1) {
+        PyErr_SetString(PyExc_ValueError, "ring must have at least 1 element");
+        return NULL;
+    }
+    if (repeat < 1) {
+        PyErr_SetString(PyExc_ValueError, "repeat must be positive");
+        return NULL;
+    }
+    if (factory == Py_None) {
+        factory = NULL;
+    } else if (!PyCallable_Check(factory)) {
+        PyErr_SetString(PyExc_TypeError, "factory must be callable or None");
+        return NULL;
+    }
 
-PyObject *run_object_benchmark(PyObject *self, PyObject *args,
-                               PyObject *kwargs) {
-    PyObject *callable;
-    PyObject *call_args;
-    static const char *kwlist[] = {"func", "args", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO", (char **)kwlist,
-                                     &callable, &call_args)) {
-        PyErr_SetString(PyExc_TypeError, "Invalid argument");
-        goto fail;
+    if (_ensure_usize_capacity(&_static_times_buf, repeat)) return NULL;
+    usize *times_buf = _static_times_buf.data;
+    usize k = (usize)ring_size;
+
+    /* Warmup walks the ring exactly like the measured loop does, so the steady
+       state reached here is the state the measurements start from. */
+    for (usize i = 0; i < warmup; i++) {
+        Py_ssize_t slot = (Py_ssize_t)((start_slot + i) % k);
+        if (unlikely(_call_slot(func, ring, slot, NULL))) return NULL;
+        if (factory && unlikely(_ring_refill(ring, slot, factory, factory_arg)))
+            return NULL;
     }
-    if (!PyCallable_Check(callable)) {
-        PyErr_SetString(PyExc_TypeError, "First argument must be callable");
-        goto fail;
+
+    usize total = 0;
+    for (usize i = 0; i < repeat; i++) {
+        /* Continue the ring index across the warmup/measure boundary (and across
+           rounds, via start_slot). Restarting at 0 would make the first K
+           measured objects younger than K builds whenever warmup is not a
+           multiple of K, breaking the invariant that every measured object has
+           been evicted by exactly K-1 later builds. */
+        Py_ssize_t slot = (Py_ssize_t)((start_slot + warmup + i) % k);
+        usize elapsed;
+        if (unlikely(_call_slot(func, ring, slot, &elapsed))) return NULL;
+        times_buf[i] = elapsed;
+        total += elapsed;
+        if (factory && unlikely(_ring_refill(ring, slot, factory, factory_arg)))
+            return NULL;
     }
-    if (!PyTuple_Check(call_args)) {
-        PyErr_SetString(PyExc_TypeError, "Second argument must be tuple");
-        goto fail;
-    }
-    usize start = perf_counter();
-    PyObject *result = PyObject_Call(callable, call_args, NULL);
-    usize end = perf_counter();
-    if (unlikely(!result)) {
-        if (!PyErr_Occurred()) {
-            PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
-        }
-        goto fail;
-    } else {
-        Py_DECREF(result);
-    }
-    usize total;
-    total = end - start;
-    return PyLong_FromUnsignedLongLong(total);
-fail:;
-    return NULL;
+    return _build_times_result(times_buf, repeat, total);
 }
 
 PyObject *inspect_pyunicode(PyObject *self, PyObject *args, PyObject *kwargs) {
@@ -538,6 +336,12 @@ fail:;
     return NULL;
 }
 
+/**
+ * copy_unicode(unicode) -> str
+ *
+ * Copy a str without its UTF-8 cache. Doubles as the per-iteration factory for
+ * the `loads str` benchmarks, so it is called with a single positional arg.
+ */
 PyObject *copy_unicode(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *unicode;
     static const char *kwlist[] = {"unicode", NULL};
@@ -548,26 +352,38 @@ PyObject *copy_unicode(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_TypeError, "Argument must be str, not other types or subclass of str");
         return NULL;
     }
-    PyUnicodeCopyInfo unicode_copy_info;
-    unicode_copy_info.valid = false;
-    return _copy_unicode(unicode, &unicode_copy_info);
+    int kind = PyUnicode_KIND(unicode);
+    Py_UCS4 max_char;
+    if (kind == 4) {
+        max_char = 0x10ffff;
+    } else if (kind == 2) {
+        max_char = 0xffff;
+    } else if (PyUnicode_IS_ASCII(unicode)) {
+        max_char = 0x7f;
+    } else {
+        max_char = 0xff;
+    }
+    Py_ssize_t size = PyUnicode_GET_LENGTH(unicode);
+    PyObject *unicode_copy = PyUnicode_New(size, max_char);
+    if (!unicode_copy) return NULL;
+    memcpy(PyUnicode_DATA(unicode_copy), PyUnicode_DATA(unicode),
+           (size_t)size * (size_t)kind);
+    return unicode_copy;
 }
 
 static PyMethodDef ssrjson_benchmark_methods[] = {
         {"copy_unicode", (PyCFunction)copy_unicode, METH_VARARGS | METH_KEYWORDS, "Copy a unicode object without UTF-8 cache."},
-        {"copy_unicode_list_invalidate_cache", (PyCFunction)copy_unicode_list_invalidate_cache, METH_VARARGS | METH_KEYWORDS, "Copy unicode list invalidate cache."},
-        {"run_object_accumulate_benchmark", (PyCFunction)run_object_accumulate_benchmark, METH_VARARGS | METH_KEYWORDS, "Benchmark."},
-        {"run_object_benchmark", (PyCFunction)run_object_benchmark, METH_VARARGS | METH_KEYWORDS, "Benchmark."},
-        {"benchmark_bytes_load", (PyCFunction)benchmark_bytes_load, METH_VARARGS | METH_KEYWORDS, "Warmup + repeat benchmark for bytes input. Returns (total_ns, [per_iter_ns])."},
-        {"benchmark_bin", (PyCFunction)benchmark_bin_py, METH_VARARGS | METH_KEYWORDS, "Warmup with items[0], time func(items[1..]). Returns (total_ns, [per_iter_ns])."},
-        {"benchmark_with_dump_cache", (PyCFunction)benchmark_with_dump_cache, METH_VARARGS | METH_KEYWORDS, "Warmup + repeat benchmark with cache enabled. Returns (total_ns, [per_iter_ns])."},
+        {"benchmark_run", (PyCFunction)benchmark_run, METH_VARARGS | METH_KEYWORDS, "Ring-buffer benchmark. Returns (total_ns, [per_iter_ns])."},
         {"inspect_pyunicode", (PyCFunction)inspect_pyunicode, METH_VARARGS | METH_KEYWORDS, "Inspect PyUnicode."},
         {"pyunicode_has_utf8_cache", (PyCFunction)pyunicode_has_utf8_cache, METH_VARARGS | METH_KEYWORDS, "Check if str has UTF-8 cache."},
         {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
 static PyModuleDef_Slot ssrjson_module_slots[] = {
-#if PY_MINOR_VERSION >= 14 && !defined(Py_GIL_DISABLED)
+/* Py_GIL_DISABLED is only defined on free-threaded builds (3.13t+), which are
+   exactly the builds where this slot matters: without it the runtime re-enables
+   the GIL on import and any free-threaded benchmark run is meaningless. */
+#ifdef Py_GIL_DISABLED
         {Py_mod_gil, Py_MOD_GIL_NOT_USED},
 #endif
         {0, NULL} /* Sentinel */

@@ -37,6 +37,13 @@ def _ensure_parent_dir(path: str) -> None:
 
 def _add_benchmark_args(parser):
     """Add common benchmark arguments to a parser."""
+    from .benchmark import (
+        DEFAULT_COLD_MULTIPLE,
+        DEFAULT_MIN_ITERATIONS,
+        DEFAULT_ROUNDS,
+        DEFAULT_STATISTIC,
+    )
+
     parser.add_argument(
         "-o",
         "--output",
@@ -60,10 +67,94 @@ def _add_benchmark_args(parser):
     )
     parser.add_argument(
         "--bin-process-megabytes",
-        help="Maximum megabytes to process per bin, default 8 (int)",
+        help="Deprecated and ignored. Object temperature is now controlled by "
+        "--locality and --cold-working-set-multiple instead of a memory knob.",
         required=False,
-        default=8,
+        default=None,
         type=int,
+    )
+    parser.add_argument(
+        "--min-iterations",
+        help="Floor on measured iterations per test case, default 200 (int). "
+        "The byte budget alone leaves large files with too few samples.",
+        required=False,
+        default=DEFAULT_MIN_ITERATIONS,
+        type=int,
+    )
+    parser.add_argument(
+        "--locality",
+        choices=["hot", "cold", "both"],
+        help="Whether the measured object is in cache when the call starts. "
+        "'hot' keeps one live copy; 'cold' keeps a ring larger than the last "
+        "level cache. Default 'both'.",
+        required=False,
+        default="both",
+    )
+    parser.add_argument(
+        "--cold-working-set-multiple",
+        help="Cold ring size as a multiple of the last level cache, default 2.0 (float).",
+        required=False,
+        default=DEFAULT_COLD_MULTIPLE,
+        type=float,
+    )
+    parser.add_argument(
+        "--llc-bytes",
+        help="Override the detected last level cache size, in bytes. Use when "
+        "auto-detection reports 'fallback'.",
+        required=False,
+        default=None,
+        type=int,
+    )
+    parser.add_argument(
+        "--statistic",
+        choices=["median", "min", "mean"],
+        help="Summary statistic per test case, default median. mean is skewed "
+        "by interrupts and can disagree with min about which library wins; all "
+        "of min/median/mean/p95 are recorded either way.",
+        required=False,
+        default=DEFAULT_STATISTIC,
+    )
+    parser.add_argument(
+        "--rounds",
+        help="Split each measurement into N interleaved chunks so drift hits "
+        "every library equally instead of penalising whichever runs last. "
+        "Default 5; use 1 for the old sequential behaviour.",
+        required=False,
+        default=DEFAULT_ROUNDS,
+        type=int,
+    )
+    parser.add_argument(
+        "--runs",
+        help="Run the whole benchmark in N fresh processes and report the "
+        "median across runs with the observed spread. This is what captures "
+        "code-layout and process-level variance. Default 1.",
+        required=False,
+        default=1,
+        type=int,
+    )
+    parser.add_argument(
+        "--pin-core",
+        help="Pin to this CPU id. Default: auto-pick the first thread of a "
+        "fastest-class core.",
+        required=False,
+        default=None,
+        type=int,
+    )
+    parser.add_argument(
+        "--no-pin",
+        help="Do not pin to a CPU core. On hybrid CPUs this lets the process "
+        "land on an efficiency core, which can invert the comparison.",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--no-verify-output",
+        help="Skip the round-trip check that each library produces the expected value.",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--allow-output-mismatch",
+        help="Record output mismatches and continue instead of aborting.",
+        action="store_true",
     )
     from .benchmark import BenchmarkCategory
 
@@ -92,22 +183,152 @@ def _resolve_benchmark_files(in_dir):
 
 def _run_benchmark_from_args(args):
     """Run benchmark from parsed args. Returns (result, json_path) or None on error."""
-    from .benchmark import run_benchmark
+    import os
+
+    from .benchmark import Locality, RunOptions, run_benchmark
 
     benchmark_files = _resolve_benchmark_files(args.in_dir)
     if benchmark_files is None:
         return None
 
+    if args.bin_process_megabytes is not None:
+        print(
+            "warning: --bin-process-megabytes is deprecated and ignored. It used to "
+            "set the bin size, which silently controlled how cold the measured "
+            "object was; use --locality and --cold-working-set-multiple instead."
+        )
+
     process_bytes = int(args.process_gigabytes * 1024 * 1024 * 1024)
-    bin_process_bytes = args.bin_process_megabytes * 1024 * 1024
-    if process_bytes <= 0 or bin_process_bytes <= 0:
-        print("process-gigabytes and bin-process-megabytes must be positive.")
+    if process_bytes <= 0:
+        print("process-gigabytes must be positive.")
+        return None
+    if args.min_iterations <= 0:
+        print("min-iterations must be positive.")
+        return None
+    if args.cold_working_set_multiple <= 0:
+        print("cold-working-set-multiple must be positive.")
         return None
 
+    if args.runs < 1:
+        print("runs must be at least 1.")
+        return None
+    if args.rounds < 1:
+        print("rounds must be at least 1.")
+        return None
+
+    localities = {
+        "hot": [Locality.HOT],
+        "cold": [Locality.COLD],
+        "both": [Locality.HOT, Locality.COLD],
+    }[args.locality]
+
+    if args.runs > 1:
+        return _run_repeated(args)
+
     result, default_file = run_benchmark(
-        benchmark_files, process_bytes, bin_process_bytes, only=args.only
+        benchmark_files,
+        process_bytes,
+        only=args.only,
+        localities=localities,
+        min_iterations=args.min_iterations,
+        cold_multiple=args.cold_working_set_multiple,
+        llc_bytes=args.llc_bytes,
+        opts=RunOptions(
+            statistic=args.statistic,
+            rounds=args.rounds,
+            verify_output=not args.no_verify_output,
+            allow_output_mismatch=args.allow_output_mismatch,
+        ),
+        pin_core=args.pin_core,
+        pin=not args.no_pin,
     )
     return result, default_file
+
+
+def _child_argv(args, out_path: str) -> list[str]:
+    """Rebuild this benchmark invocation as a single-run child command."""
+    argv = [
+        "benchmark",
+        "--process-gigabytes",
+        str(args.process_gigabytes),
+        "--min-iterations",
+        str(args.min_iterations),
+        "--locality",
+        args.locality,
+        "--cold-working-set-multiple",
+        str(args.cold_working_set_multiple),
+        "--statistic",
+        args.statistic,
+        "--rounds",
+        str(args.rounds),
+        "--runs",
+        "1",
+        "-o",
+        out_path,
+    ]
+    if args.in_dir:
+        argv += ["--in-dir", args.in_dir]
+    if args.only:
+        argv += ["--only", args.only]
+    if args.llc_bytes:
+        argv += ["--llc-bytes", str(args.llc_bytes)]
+    if args.pin_core is not None:
+        argv += ["--pin-core", str(args.pin_core)]
+    if args.no_pin:
+        argv.append("--no-pin")
+    if args.no_verify_output:
+        argv.append("--no-verify-output")
+    if args.allow_output_mismatch:
+        argv.append("--allow-output-mismatch")
+    return argv
+
+
+def _run_repeated(args):
+    """Run the whole benchmark in N fresh processes and merge.
+
+    A single process cannot see code/data layout effects: heap and binary
+    layout are fixed for its lifetime, so repeating inside one process
+    re-measures the same layout. Two libraries this close need the
+    across-process distribution, not the within-process one.
+    """
+    import json as _json
+    import os
+    import subprocess
+    import sys as _sys
+    import tempfile
+
+    from .benchmark import (
+        merge_run_results,
+        parse_file_result,
+        _get_real_output_file_name,
+    )
+
+    results = []
+    with tempfile.TemporaryDirectory(prefix="ssrjson_bench_runs_") as tmpdir:
+        for run_index in range(args.runs):
+            out_path = os.path.join(tmpdir, f"run{run_index}.json")
+            print(f"=== run {run_index + 1}/{args.runs} (fresh process) ===")
+            completed = subprocess.run(
+                [
+                    _sys.executable,
+                    "-m",
+                    "ssrjson_benchmark",
+                    *_child_argv(args, out_path),
+                ]
+            )
+            if completed.returncode != 0:
+                print(
+                    f"run {run_index + 1} failed with exit code {completed.returncode}"
+                )
+                return None
+            with open(out_path, "rb") as f:
+                results.append(parse_file_result(_json.load(f)))
+
+    merged = merge_run_results(results)
+    out_file = _get_real_output_file_name()
+    with open(out_file, "w", encoding="utf-8") as f:
+        f.write(merged.dumps())
+    return merged, out_file
 
 
 def _cmd_benchmark(args) -> int:

@@ -1,13 +1,13 @@
 import io
+import math
 import os
 from typing import TYPE_CHECKING
 
 from .benchmark import (
-    INDEXED_GROUPS,
-    PRINT_INDEX_GROUPS,
-    _get_benchmark_libraries,
-    _NAME_DUMPSTOBYTES,
+    BASE_INDEX_GROUPS,
     fetch_header,
+    print_index_name,
+    split_index_name,
 )
 from .result_types import BenchmarkFinalResult, BenchmarkResultPerFileTarget
 
@@ -87,6 +87,7 @@ class PlotConfig:
         title_fontsize: int = 20,
         ratio_fontsize: int = 9,
         gbps_fontsize: int = 10,
+        wspace: float = 0.0,
     ):
         self.bar_width = bar_width
         self.fig_width_per_cat = fig_width_per_cat
@@ -95,6 +96,7 @@ class PlotConfig:
         self.title_fontsize = title_fontsize
         self.ratio_fontsize = ratio_fontsize
         self.gbps_fontsize = gbps_fontsize
+        self.wspace = wspace
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +137,6 @@ def plot_benchmark_svg(
     categories: list[str],
     data: dict[str, BenchmarkResultPerFileTarget],
     doc_name: str,
-    mask: list[bool] | None = None,
     config: PlotConfig | None = None,
 ) -> io.BytesIO:
     """Generate an SVG bar chart for a single file's benchmark results.
@@ -146,23 +147,31 @@ def plot_benchmark_svg(
             (this is typically the .targets dict of a BenchmarkResultPerFile,
              or the BenchmarkResultPerFile itself accessed by group_name)
         doc_name: title for the chart
-        mask: optional boolean mask for categories
         config: optional PlotConfig
     Returns:
         BytesIO containing the SVG
+
+    Groups that were skipped for this file (e.g. the cached-dump groups on an
+    ASCII document) simply have no entry in *data* and their subplot is turned
+    off, so no separate mask is needed.
     """
     import matplotlib.pyplot as plt
 
     if config is None:
-        config = PlotConfig()
-    if mask is None:
-        mask = [True] * len(categories)
+        # Narrow sections (dumps to str, loads) hold two charts per row and can
+        # afford room between them; dumps to bytes packs four across and has to
+        # stay tight to fit the page width.
+        config = (
+            PlotConfig(fig_width_per_cat=5.0, wspace=0.3)
+            if len(categories) <= 2
+            else PlotConfig()
+        )
 
     # Determine libraries as the union across all visible categories,
     # then sort according to the canonical display order.
     libs_seen: set[str] = set()
-    for i, cat in enumerate(categories):
-        if mask[i] and cat in data:
+    for cat in categories:
+        if cat in data:
             target = (
                 data[cat]
                 if isinstance(data[cat], BenchmarkResultPerFileTarget)
@@ -187,6 +196,12 @@ def plot_benchmark_svg(
 
     n = len(categories)
     bar_width = config.bar_width
+    # Nominal canvas width. The saved SVG is padded up to this below: without
+    # it each figure is cropped to its own content, and since the PDF stretches
+    # every image to the page width, two sections with the same column count
+    # come out at different sizes purely because their tick labels differ in
+    # length.
+    target_w_in = config.fig_width_per_cat * n
 
     fig, axs = plt.subplots(
         1,
@@ -194,13 +209,13 @@ def plot_benchmark_svg(
         figsize=(config.fig_width_per_cat * n, config.fig_height),
         sharey=False,
         tight_layout=True,
-        gridspec_kw={"wspace": 0},
+        gridspec_kw={"wspace": config.wspace},
     )
     if n == 1:
         axs = [axs]
 
-    for i, (ax, cat) in enumerate(zip(axs, categories)):
-        if not mask[i] or cat not in data:
+    for ax, cat in zip(axs, categories):
+        if cat not in data:
             ax.axis("off")
             continue
 
@@ -246,38 +261,58 @@ def plot_benchmark_svg(
 
         gbps = ssrjson_bps / (1024**3) if ssrjson_bps else 0.0
 
-        # Compute ratio std dev for display (CV * ratio)
-        # CV = std_dev / mean_per_iteration = std_dev * repeat_count / speed
-        ratio_errors = []
+        # Error bars come from the recorded confidence interval of the summary
+        # statistic (or the run-to-run range when --runs > 1). The old bar
+        # plotted the standard deviation of a *single iteration*, which
+        # describes the latency distribution rather than the uncertainty of the
+        # charted number and overstates it by roughly sqrt(n).
+        ratio_errors: list[tuple[float, float]] = []
+        mismatched: list[bool] = []
         for j_idx, name in enumerate(cat_libs):
-            if vals[j_idx] is None:
-                ratio_errors.append(0)
-            elif name in target and not isinstance(target, dict):
-                lib_result = target[name]
-                if (
-                    lib_result.speed > 0
-                    and lib_result.std_dev > 0
-                    and lib_result.repeat_count > 0
-                ):
-                    cv = lib_result.std_dev * lib_result.repeat_count / lib_result.speed
-                    ratio_errors.append(vals[j_idx] * cv)
-                else:
-                    ratio_errors.append(0)
+            val = vals[j_idx]
+            if val is None or isinstance(target, dict) or name not in target:
+                ratio_errors.append((0.0, 0.0))
+                mismatched.append(False)
+                continue
+            lib_result = target[name]
+            mismatched.append(not lib_result.output_ok)
+            lo, hi = lib_result.ratio_lo, lib_result.ratio_hi
+            if lo > 0 and hi > 0 and hi >= lo:
+                ratio_errors.append((max(0.0, val - lo), max(0.0, hi - val)))
+            elif (
+                lib_result.std_dev > 0
+                and lib_result.speed > 0
+                and lib_result.repeat_count > 1
+            ):
+                # Pre-CI result files: derive a standard error of the mean so
+                # old reports do not keep showing the overstated bar.
+                cv = lib_result.std_dev * lib_result.repeat_count / lib_result.speed
+                half = val * cv / math.sqrt(lib_result.repeat_count)
+                ratio_errors.append((half, half))
             else:
-                ratio_errors.append(0)
+                ratio_errors.append((0.0, 0.0))
 
-        for xi, val, col, err in zip(cat_x_positions, vals, cat_colors, ratio_errors):
+        for xi, val, col, err, bad in zip(
+            cat_x_positions, vals, cat_colors, ratio_errors, mismatched
+        ):
             if val is None:
                 continue
 
-            ax.bar(xi, val, width=bar_width, color=col)
+            ax.bar(
+                xi,
+                val,
+                width=bar_width,
+                color=col,
+                hatch="//" if bad else None,
+                edgecolor="#d63031" if bad else None,
+            )
 
-            # Show std dev whisker if enabled and significant
-            if config.show_std_dev and err > 0:
+            err_lo, err_hi = err
+            if config.show_std_dev and (err_lo > 0 or err_hi > 0):
                 ax.errorbar(
                     xi,
                     val,
-                    yerr=err,
+                    yerr=[[err_lo], [err_hi]],
                     fmt="none",
                     ecolor="#333333",
                     capsize=2,
@@ -285,24 +320,24 @@ def plot_benchmark_svg(
                     linewidth=0.8,
                 )
 
-            # Ratio label
-            label_y = val + max(err, 0) + 0.05
+            # Ratio label; "!" marks output that did not round-trip
+            label_y = val + max(err_hi, 0) + 0.05
             ax.text(
                 xi,
                 label_y,
-                f"{val:.2f}x",
+                f"{val:.2f}x" + ("!" if bad else ""),
                 ha="center",
                 va="bottom",
                 fontsize=config.ratio_fontsize,
-                color=_get_ratio_color(val),
+                color="#d63031" if bad else _get_ratio_color(val),
             )
-            # CV percentage (±X.X%) below the ratio label
-            if config.show_std_dev and err > 0 and val > 0:
-                cv_pct = err / val * 100
+            # Relative half-width of the interval below the ratio label
+            if config.show_std_dev and (err_lo > 0 or err_hi > 0) and val > 0:
+                pct = (err_lo + err_hi) / 2 / val * 100
                 ax.text(
                     xi,
                     label_y - 0.02,
-                    f"\u00b1{cv_pct:.1f}%",
+                    f"\u00b1{pct:.1f}%",
                     ha="center",
                     va="top",
                     fontsize=config.ratio_fontsize - 2,
@@ -325,7 +360,7 @@ def plot_benchmark_svg(
 
         ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
         max_val_with_err = max(
-            (v + e for v, e in zip(vals, ratio_errors) if v is not None),
+            (v + e[1] for v, e in zip(vals, ratio_errors) if v is not None),
             default=1.0,
         )
         ax.set_ylim(0, max(max_val_with_err, 1.0) * 1.1)
@@ -375,7 +410,13 @@ def plot_benchmark_svg(
     )
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="svg", bbox_inches="tight")
+    from matplotlib.transforms import Bbox
+
+    tb = fig.get_tightbbox(fig.canvas.get_renderer())
+    if tb.width < target_w_in:
+        pad = (target_w_in - tb.width) / 2.0
+        tb = Bbox.from_extents(tb.x0 - pad, tb.y0, tb.x1 + pad, tb.y1)
+    plt.savefig(buf, format="svg", bbox_inches=tb)
     buf.seek(0)
     plt.close(fig)
     return buf
@@ -389,6 +430,7 @@ def plot_benchmark_svg(
 def plot_distribution_svg(
     ratio_distr: list[list[float]],
     lib_names: list[str],
+    title: str = "Speed Ratio Distribution per Library",
 ) -> io.BytesIO:
     """Generate a box-plot SVG of speed ratio distributions per library.
 
@@ -424,7 +466,7 @@ def plot_distribution_svg(
     ax.set_xticklabels(lib_names)
     ax.set_ylabel("Speed Ratio to json")
     ax.yaxis.set_major_formatter("{x:.1f}x")
-    ax.set_title("Speed Ratio Distribution per Library")
+    ax.set_title(title)
 
     for patch, name in zip(bplot["boxes"], lib_names):
         patch.set_facecolor(lib_colors.get(name, "#999999"))
@@ -441,60 +483,96 @@ def plot_distribution_svg(
 # ---------------------------------------------------------------------------
 
 
-def _get_cats_and_masks(result: BenchmarkFinalResult):
-    """Compute categories per index group and ASCII masks."""
-    benchmark_groups = _get_benchmark_libraries()
-    cats = [
-        [a for a in result.categories if benchmark_groups[a].index_name == index_name]
-        for index_name in INDEXED_GROUPS
-    ]
-    masks = [
-        [
-            benchmark_groups[a].index_name != _NAME_DUMPSTOBYTES
-            or not benchmark_groups[a].skip_when_ascii
-            for a in cats[i]
-        ]
-        for i in range(len(INDEXED_GROUPS))
-    ]
-    return cats, masks, benchmark_groups
+def _get_index_names(result: BenchmarkFinalResult) -> list[str]:
+    """Index groups present in the result, in the order they were measured.
+
+    Derived from the data rather than a module constant so that both the
+    locality-split layout and pre-split result files render, and so that
+    re-rendering never depends on which JSON libraries happen to be installed.
+    """
+    names = list(result.categories.keys())
+    names += [name for name in result.results if name not in names]
+    # Keep locality blocks together and the base groups in their canonical
+    # order within each block, independent of dict ordering in the JSON.
+    base_order = {base: i for i, base in enumerate(BASE_INDEX_GROUPS)}
+    localities: list[str] = []
+    for name in names:
+        locality = split_index_name(name)[1]
+        if locality not in localities:
+            localities.append(locality)
+    # Base-major: the report is three parts (dumps to bytes, dumps to str,
+    # loads), each holding its localities, rather than one block per locality.
+    return sorted(
+        names,
+        key=lambda n: (
+            base_order.get(split_index_name(n)[0], len(base_order)),
+            localities.index(split_index_name(n)[1]),
+        ),
+    )
+
+
+def _get_cats(result: BenchmarkFinalResult) -> dict[str, list[str]]:
+    """Ordered group names per index group."""
+    cats: dict[str, list[str]] = {}
+    for index_name in _get_index_names(result):
+        ordered = list(result.categories.get(index_name, []))
+        for file_result in result.results.get(index_name, {}).values():
+            for group_name in file_result.targets:
+                if group_name not in ordered:
+                    ordered.append(group_name)
+        cats[index_name] = ordered
+    return cats
+
+
+def _group_by_locality(result: BenchmarkFinalResult) -> dict[str, list[str]]:
+    """{locality: [index_name, ...]}. Pre-split result files land under ''."""
+    grouped: dict[str, list[str]] = {}
+    for index_name in _get_index_names(result):
+        _, locality = split_index_name(index_name)
+        grouped.setdefault(locality, []).append(index_name)
+    return grouped
 
 
 def _get_non_baseline_libs(result: BenchmarkFinalResult) -> list[str]:
     """Get the union of non-baseline library names from the result data, sorted by canonical order."""
     libs_seen: set[str] = set()
-    for index_name in INDEXED_GROUPS:
-        if index_name in result.results:
-            for filename in result.filenames:
-                if filename in result.results[index_name]:
-                    file_result = result.results[index_name][filename]
-                    for target in file_result.targets.values():
-                        for lib in target.libraries:
-                            if lib != "json":
-                                libs_seen.add(lib)
+    for files_dict in result.results.values():
+        for filename in result.filenames:
+            file_result = files_dict.get(filename)
+            if file_result is None:
+                continue
+            for target in file_result.targets.values():
+                for lib in target.libraries:
+                    if lib != "json":
+                        libs_seen.add(lib)
     _order_map = {name: idx for idx, name in enumerate(_CANONICAL_LIB_ORDER)}
     return sorted(libs_seen, key=lambda n: _order_map.get(n, len(_CANONICAL_LIB_ORDER)))
 
 
-def _collect_ratios(result: BenchmarkFinalResult, cats, masks):
-    """Collect ratio distributions for non-baseline libraries."""
+def _collect_ratios(result: BenchmarkFinalResult, cats, index_names):
+    """Collect ratio distributions for non-baseline libraries over *index_names*.
+
+    Groups that were skipped for a file simply have no target entry, so no
+    separate ASCII mask is needed.
+    """
     non_baseline_libs = _get_non_baseline_libs(result)
     ratios = {lib: [] for lib in non_baseline_libs}
 
-    for i, indexed_group in enumerate(INDEXED_GROUPS):
-        if indexed_group not in result.results:
-            continue
+    for indexed_group in index_names:
+        files = result.results.get(indexed_group, {})
         for bench_filename in result.filenames:
-            if bench_filename not in result.results[indexed_group]:
+            file_result = files.get(bench_filename)
+            if file_result is None:
                 continue
-            file_result = result.results[indexed_group][bench_filename]
-            is_ascii = file_result.pyunicode_is_ascii
-            mask = masks[i] if is_ascii else [True] * len(cats[i])
-            for j, cat in enumerate(cats[i]):
-                if not mask[j]:
+            for cat in cats.get(indexed_group, []):
+                target = file_result.targets.get(cat)
+                if target is None:
                     continue
-                if cat not in file_result.targets:
+                # Groups whose comparison is structurally unfair for this file
+                # (ssrJSON skipping a UTF-8 cache write that orjson cannot skip)
+                # keep their own chart but must not colour the headline summary.
+                if not target.in_summary:
                     continue
-                target = file_result.targets[cat]
                 for lib_name in non_baseline_libs:
                     if lib_name in target:
                         ratios[lib_name].append(target[lib_name].ratio)
@@ -517,9 +595,11 @@ def _draw_page_number(c: "canvas.Canvas", page_num: int):
 
 def _generate_pdf_report(
     figures: list[list[io.BytesIO]],
+    section_names: list[str],
     header_text: str,
     output_pdf_path: str,
-    distribution_svg: io.BytesIO,
+    distribution_svgs: list[io.BytesIO],
+    summary_note: str | list[str] = "",
 ) -> str:
     from reportlab.graphics import renderPDF
     from reportlab.lib.pagesizes import A4
@@ -594,26 +674,47 @@ def _generate_pdf_report(
     c.addOutlineEntry("TL;DR", "TL;DR", level=0)
     y_pos -= 20
 
-    distribution_svg.seek(0)
-    drawing = svg2rlg(distribution_svg, font_map=font_map)
-    avail_w = width - 80
-    scale = avail_w / drawing.width
-    drawing.width *= scale
-    drawing.height *= scale
-    drawing.scale(scale, scale)
-    img_h = drawing.height
-    if y_pos - img_h - vertical_gap < bottom_margin:
-        _draw_page_number(c, p)
-        p += 1
-        c.showPage()
-        y_pos = height - bottom_margin
-    renderPDF.draw(drawing, c, 40, y_pos - img_h)
-    y_pos -= img_h + vertical_gap
+    for distribution_svg in distribution_svgs:
+        distribution_svg.seek(0)
+        drawing = svg2rlg(distribution_svg, font_map=font_map)
+        avail_w = width - 80
+        scale = avail_w / drawing.width
+        drawing.width *= scale
+        drawing.height *= scale
+        drawing.scale(scale, scale)
+        img_h = drawing.height
+        if y_pos - img_h - vertical_gap < bottom_margin:
+            _draw_page_number(c, p)
+            p += 1
+            c.showPage()
+            y_pos = height - bottom_margin
+        renderPDF.draw(drawing, c, 40, y_pos - img_h)
+        y_pos -= img_h + vertical_gap
 
-    for i in range(len(INDEXED_GROUPS)):
-        name = PRINT_INDEX_GROUPS[i]
-        figs = figures[i]
+    paragraphs = [summary_note] if isinstance(summary_note, str) else summary_note
+    paragraphs = [p for p in paragraphs if p]
+    if paragraphs:
+        c.setFont("Helvetica-Oblique", 7)
+        c.setFillColorRGB(0.35, 0.35, 0.35)
+        max_chars = 150
+        for para in paragraphs:
+            words, line = para.split(), ""
+            note_lines = []
+            for word in words:
+                if len(line) + len(word) + 1 > max_chars:
+                    note_lines.append(line)
+                    line = word
+                else:
+                    line = f"{line} {word}".strip()
+            note_lines.append(line)
+            for note_line in note_lines:
+                c.drawString(40, y_pos, note_line)
+                y_pos -= 9
+            y_pos -= 4
+        c.setFillColorRGB(0, 0, 0)
+        y_pos -= 8
 
+    for name, figs in zip(section_names, figures):
         text_obj = c.beginText()
         text_obj.setTextOrigin(40, y_pos)
         text_obj.setFont(_PDF_HEADING_FONT, 14)
@@ -653,6 +754,143 @@ def _generate_pdf_report(
 # ---------------------------------------------------------------------------
 
 
+def _build_figures(result: BenchmarkFinalResult, cats, index_names, fmt: str):
+    """One SVG per (index group, file), in report order."""
+    figures = []
+    for indexed_group in index_names:
+        files = result.results.get(indexed_group, {})
+        group_figures = []
+        for bench_filename in result.filenames:
+            file_result = files.get(bench_filename)
+            if file_result is None:
+                continue
+            print(f"Processing {bench_filename} [{indexed_group}]({fmt})")
+            group_figures.append(
+                plot_benchmark_svg(
+                    cats[indexed_group], file_result.targets, bench_filename
+                )
+            )
+        figures.append(group_figures)
+    return figures
+
+
+def _summary_note(result: BenchmarkFinalResult) -> str:
+    """Explain which groups the aggregate leaves out, and why.
+
+    Dropping them silently would be its own kind of dishonesty: the charts
+    still show them, so the reader needs to know the box plot does not.
+    """
+    excluded: list[str] = []
+    for files_dict in result.results.values():
+        for file_result in files_dict.values():
+            for group_name, target in file_result.targets.items():
+                if not target.in_summary and group_name not in excluded:
+                    excluded.append(group_name)
+    if not excluded:
+        return ""
+    return (
+        "Every library in this summary runs in the configuration its wheel "
+        "ships with, including ssrJSON's UTF-8 cache writing (on by default, "
+        "and not switchable at all in orjson, msgspec or pydantic_core). "
+        "'dumps to bytes' is therefore the serialize-once cost and "
+        "'dumps to bytes (cached)' the steady-state repeat-dump cost; real "
+        "workloads sit between them depending on how often the caller "
+        "re-serializes the same object. Excluded from this summary (still "
+        "charted below): "
+        + ", ".join(f"'{name}'" for name in excluded)
+        + " -- ssrJSON is forced out of its default there to isolate what the "
+        "cache write costs, which is an engine diagnostic rather than a "
+        "package comparison."
+    )
+
+
+def _breakeven_rows(result: BenchmarkFinalResult):
+    """Derive, per file, how many dumps of one object it takes for the UTF-8
+    cache write to pay for itself.
+
+    Pure arithmetic over numbers already measured, no extra benchmarking:
+        N * t_nowrite  ==  t_write + (N - 1) * t_cached
+
+    Two guards, both learned the hard way. Only the hot locality is used: the
+    cached group re-dumps one live object, so pairing it with a cold
+    first-dump would mix two memory regimes in one equation. And the write
+    cost must clear its own confidence interval -- on files with few non-ASCII
+    strings it is under the noise floor, and dividing two indistinguishable
+    numbers produced break-evens below 1, which is not a physical answer. Such
+    files are reported as "write cost not measurable" instead, which is the
+    honest and also more useful statement: leave the default alone.
+    """
+    resolved: list[tuple[str, float]] = []
+    negligible: list[str] = []
+    for index_name, files_dict in result.results.items():
+        if split_index_name(index_name)[1] != "hot":
+            continue
+        for file_name, file_result in files_dict.items():
+
+            def ssr(group_name, _fr=file_result):
+                target = _fr.targets.get(group_name)
+                if target is None:
+                    return None
+                return _fr.targets[group_name].lib_results.get("ssrjson")
+
+            w = ssr("dumps to bytes")
+            nw = ssr("dumps to bytes (no cache write)")
+            c = ssr("dumps to bytes (cached)")
+            if not (w and nw and c):
+                continue
+            # Is writing measurably slower than not writing?
+            if not (w.stat > nw.stat and w.stat_lo > nw.stat_hi):
+                negligible.append(file_name)
+                continue
+            # Does reading the cache measurably help? Without that the write
+            # can never amortise and there is no crossover.
+            if not (nw.stat > c.stat and nw.stat_lo > c.stat_hi):
+                negligible.append(file_name)
+                continue
+            resolved.append((file_name, (w.stat - c.stat) / (nw.stat - c.stat)))
+    resolved.sort()
+    return resolved, sorted(set(negligible))
+
+
+def _breakeven_note(result: BenchmarkFinalResult) -> str:
+    resolved, negligible = _breakeven_rows(result)
+    if not resolved and not negligible:
+        return ""
+    parts = []
+    if resolved:
+        parts.append(
+            "UTF-8 cache break-even for ssrJSON -- how many times one object "
+            "must be serialized before writing the cache pays for itself: "
+            + "; ".join(f"{name} N={n:.1f}" for name, n in resolved)
+            + ". Below that, ssrjson.write_utf8_cache(False) is faster; above "
+            "it, the default wins."
+        )
+    if negligible:
+        parts.append(
+            "On " + ", ".join(negligible) + " the cache write costs less than "
+            "the measurement can resolve, so there is no crossover to report "
+            "and the default needs no thought."
+        )
+    return " ".join(parts)
+
+
+def _build_distributions(
+    result: BenchmarkFinalResult, cats
+) -> list[tuple[str, io.BytesIO]]:
+    """One ratio box plot per locality, so the reader can see directly how much
+    of a library's advantage comes from the cold regime."""
+    distributions = []
+    for locality, index_names in _group_by_locality(result).items():
+        libs, ratio_lists = _collect_ratios(result, cats, index_names)
+        title = "Speed Ratio Distribution per Library"
+        if locality:
+            title += f" ({locality})"
+        distributions.append(
+            (locality, plot_distribution_svg(ratio_lists, libs, title))
+        )
+    return distributions
+
+
 def generate_report_pdf(
     result: BenchmarkFinalResult, file: str, out_dir: str | None = None
 ) -> str:
@@ -664,36 +902,26 @@ def generate_report_pdf(
     file = file.removesuffix(".json")
     report_name = f"{file}.pdf"
 
-    figures = [[] for _ in range(len(INDEXED_GROUPS))]
-    cats, masks, benchmark_groups = _get_cats_and_masks(result)
-
-    for i, indexed_group in enumerate(INDEXED_GROUPS):
-        if indexed_group not in result.results:
-            continue
-        for bench_filename in result.filenames:
-            if bench_filename not in result.results[indexed_group]:
-                continue
-            print(f"Processing {bench_filename} [{indexed_group}](PDF)")
-            file_result = result.results[indexed_group][bench_filename]
-            if file_result.pyunicode_is_ascii:
-                mask = masks[i]
-            else:
-                mask = [True] * len(cats[i])
-            figures[i].append(
-                plot_benchmark_svg(cats[i], file_result.targets, bench_filename, mask)
-            )
-
-    non_baseline_libs, ratio_lists = _collect_ratios(result, cats, masks)
-    dist_svg = plot_distribution_svg(ratio_lists, non_baseline_libs)
+    cats = _get_cats(result)
+    index_names = _get_index_names(result)
+    figures = _build_figures(result, cats, index_names, "PDF")
+    distributions = _build_distributions(result, cats)
 
     template = fetch_header(result)
     out_path = _generate_pdf_report(
         figures,
+        section_names=[print_index_name(name) for name in index_names],
         header_text=template,
         output_pdf_path=os.path.join(out_dir, report_name),
-        distribution_svg=dist_svg,
+        distribution_svgs=[svg for _, svg in distributions],
+        summary_note=[_summary_note(result), _breakeven_note(result)],
     )
     return out_path
+
+
+def _safe_slug(name: str) -> str:
+    """Index names contain '|', which is awkward in filenames and markdown links."""
+    return name.replace("|", "_")
 
 
 def generate_report_markdown(
@@ -714,38 +942,39 @@ def generate_report_markdown(
     template = fetch_header(result)
     template += "\n\n## TL;DR\n\nTLDRIMGPLACEHOLDER\n\n"
 
-    cats, masks, benchmark_groups = _get_cats_and_masks(result)
+    cats = _get_cats(result)
 
-    for i, indexed_group in enumerate(INDEXED_GROUPS):
-        template += f"\n\n## {PRINT_INDEX_GROUPS[i]}\n\n"
-        if indexed_group not in result.results:
-            continue
+    for indexed_group in _get_index_names(result):
+        template += f"\n\n## {print_index_name(indexed_group)}\n\n"
+        files = result.results.get(indexed_group, {})
+        slug = _safe_slug(indexed_group)
         for bench_filename in result.filenames:
-            if bench_filename not in result.results[indexed_group]:
+            file_result = files.get(bench_filename)
+            if file_result is None:
                 continue
             print(f"Processing {bench_filename} [{indexed_group}](Markdown)")
-            file_result = result.results[indexed_group][bench_filename]
-            if file_result.pyunicode_is_ascii:
-                mask = masks[i]
-            else:
-                mask = [True] * len(cats[i])
             svg_buf = plot_benchmark_svg(
-                cats[i], file_result.targets, bench_filename, mask
+                cats[indexed_group], file_result.targets, bench_filename
             )
-            svg_path = os.path.join(
-                report_folder, f"{bench_filename}_{indexed_group}.svg"
-            )
-            with open(svg_path, "wb") as svg_file:
+            svg_name = f"{bench_filename}_{slug}.svg"
+            with open(os.path.join(report_folder, svg_name), "wb") as svg_file:
                 svg_file.write(svg_buf.getvalue())
-            template += f"![{bench_filename}_{indexed_group}](./{bench_filename}_{indexed_group}.svg)\n\n"
+            template += f"![{bench_filename}_{slug}](./{svg_name})\n\n"
 
-    non_baseline_libs, ratio_lists = _collect_ratios(result, cats, masks)
-    dist_svg = plot_distribution_svg(ratio_lists, non_baseline_libs)
-    with open(os.path.join(report_folder, "ratio_distribution.svg"), "wb") as svg_file:
-        svg_file.write(dist_svg.getvalue())
-    template = template.replace(
-        "TLDRIMGPLACEHOLDER", "![ratio_distribution](./ratio_distribution.svg)"
-    )
+    tldr = ""
+    for locality, dist_svg in _build_distributions(result, cats):
+        svg_name = (
+            f"ratio_distribution_{locality}.svg"
+            if locality
+            else "ratio_distribution.svg"
+        )
+        with open(os.path.join(report_folder, svg_name), "wb") as svg_file:
+            svg_file.write(dist_svg.getvalue())
+        tldr += f"![ratio_distribution]({'./' + svg_name})\n\n"
+    for note in (_summary_note(result), _breakeven_note(result)):
+        if note:
+            tldr += f"> {note}\n\n"
+    template = template.replace("TLDRIMGPLACEHOLDER", tldr.strip())
 
     ret = os.path.join(report_folder, report_name)
     with open(ret, "w") as f:

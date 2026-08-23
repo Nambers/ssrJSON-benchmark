@@ -12,4 +12,9 @@ SIMD flag:      {SIMD_FLAGS}
 Chipset:        {CHIPSET}
 Memory:         {MEM}
 Process(GB):    {PROCESS_MEM}
-PerBin(MB):     {PER_BIN_MEM}
+Locality:       {LOCALITY}
+LLC:            {LLC}
+MinIters:       {MIN_ITERS}
+Statistic:      {STATISTIC}
+Pinned CPU:     {CPU}
+Environment:    {ENV}
