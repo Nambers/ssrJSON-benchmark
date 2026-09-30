@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "results/**/*.pdf"
+      - ".github/html_gen.py"
       - ".github/workflows/page.yaml"
   workflow_dispatch:
 
