@@ -11,7 +11,7 @@ VERSION_RE = re.compile(r"\d+(?:\.\d+)*")
 LEGACY_INFIX = "_benchmark_result"
 
 # Machines that were uploaded under an older name, mapped onto their current
-# name so that each machine has exactly one "latest" entry.
+# name so that all results of a machine are listed together.
 MACHINE_ALIASES = {
     "i7-13700K": "i7-13700K_linux",
     "rpi5": "armv8-rpi5b",
@@ -122,7 +122,7 @@ with index_file.open("w", encoding="utf-8") as f:
         <h1>ssrJSON Benchmark Results</h1>
     </header>
     <main>
-        <p class="note">The newest result for each machine is highlighted as <span class="badge">latest</span>.</p>
+        <p class="note">Results for the newest ssrJSON release are highlighted as <span class="badge">latest</span>.</p>
         <p class="note">Newest ssrJSON release on GitHub: <a id="ssrjson-latest" href="https://github.com/Antares0982/ssrJSON/releases/latest" target="_blank">see releases</a></p>
 """
     )
@@ -146,7 +146,6 @@ with index_file.open("w", encoding="utf-8") as f:
 
             for machine in sorted(machines, key=str.casefold):
                 entries = sorted(machines[machine], key=version_order, reverse=True)
-                newest = entries[0][1]
 
                 f.write(f"<h3>{html.escape(machine.replace('_', ' '))}</h3>\n<ul>\n")
                 for pdf_file, version in entries:
@@ -155,10 +154,9 @@ with index_file.open("w", encoding="utf-8") as f:
                         f"<a href='{html.escape(quote(relative_path.as_posix()))}' "
                         f"target='_blank'>{html.escape(pdf_file.name)}</a>"
                     )
-                    if version is not None and version == newest:
-                        f.write(
-                            f"<li class='latest'>{link}<span class='badge'>latest</span></li>\n"
-                        )
+                    if version is not None:
+                        version_attr = html.escape(".".join(map(str, version)))
+                        f.write(f"<li data-version='{version_attr}'>{link}</li>\n")
                     else:
                         f.write(f"<li>{link}</li>\n")
 
@@ -170,14 +168,52 @@ with index_file.open("w", encoding="utf-8") as f:
     f.write(
         """    </main>
     <script>
-        fetch("https://api.github.com/repos/Antares0982/ssrJSON/releases/latest")
-            .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
-            .then((release) => {
-                const link = document.getElementById("ssrjson-latest");
-                link.textContent = release.tag_name;
-                link.href = release.html_url;
-            })
-            .catch(() => {});
+        const RELEASE_API = "https://api.github.com/repos/Antares0982/ssrJSON/releases/latest";
+        // Cache the release in localStorage to stay clear of the GitHub API rate limit.
+        const CACHE_KEY = "ssrjson-latest-release";
+        const CACHE_TTL_MS = 60 * 60 * 1000;
+
+        function normalizeVersion(tag) {
+            return tag.replace(/^v/i, "").split(".").map(Number).join(".");
+        }
+
+        function applyRelease(release) {
+            const link = document.getElementById("ssrjson-latest");
+            link.textContent = release.tag_name;
+            link.href = release.html_url;
+
+            const version = normalizeVersion(release.tag_name);
+            document.querySelectorAll("li[data-version]").forEach((item) => {
+                const isLatest = item.dataset.version === version;
+                const badge = item.querySelector(".badge");
+                item.classList.toggle("latest", isLatest);
+                if (isLatest && !badge) {
+                    item.insertAdjacentHTML("beforeend", "<span class='badge'>latest</span>");
+                } else if (!isLatest && badge) {
+                    badge.remove();
+                }
+            });
+        }
+
+        let cached = null;
+        try {
+            cached = JSON.parse(localStorage.getItem(CACHE_KEY));
+        } catch (e) {}
+        if (cached && cached.release) {
+            applyRelease(cached.release);
+        }
+        if (!cached || !(Date.now() - cached.time < CACHE_TTL_MS)) {
+            fetch(RELEASE_API)
+                .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
+                .then((json) => {
+                    const release = { tag_name: json.tag_name, html_url: json.html_url };
+                    applyRelease(release);
+                    try {
+                        localStorage.setItem(CACHE_KEY, JSON.stringify({ time: Date.now(), release }));
+                    } catch (e) {}
+                })
+                .catch(() => {});
+        }
     </script>
 </body>
 </html>
