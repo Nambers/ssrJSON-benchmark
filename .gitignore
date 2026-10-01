@@ -8,6 +8,7 @@
 /result-*
 /.vscode
 /build-*
+/local-archives
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
