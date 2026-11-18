@@ -1272,6 +1272,24 @@ def _collect_system_info(
     return info
 
 
+def _short_os(os_info: str) -> str:
+    """The OS line without the kernel build timestamp, which made it wrap and
+    says nothing about speed. Darwin keeps only its xnu tag, whose SoC suffix
+    (T8103 = M1) names the chip when Chipset detection fails. The JSON keeps
+    the full string."""
+    parts = os_info.split(" ", 3)
+    if len(parts) < 4:
+        return os_info
+    version = parts[3]
+    if version.startswith("Darwin Kernel Version"):
+        xnu = re.search(r"xnu-\S+", version)
+        version = xnu.group(0) if xnu else ""
+    else:
+        version = re.split(r"\s*\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b", version)[0]
+        version = version.rstrip(" ,:")
+    return " ".join(p for p in (*parts[:3], version) if p)
+
+
 def fetch_header(result: BenchmarkFinalResult) -> str:
     """Format header text from system info stored in the benchmark result."""
     with open(os.path.join(_CUR_DIR, "template.md"), "r") as f:
@@ -1323,7 +1341,7 @@ def fetch_header(result: BenchmarkFinalResult) -> str:
         REV=si.rev,
         SSRJSON_BUILD=si.ssrjson_build,
         TIME=si.generated_time,
-        OS=si.os_info,
+        OS=_short_os(si.os_info),
         PYTHON=si.python,
         ORJSON_VER=si.orjson_ver,
         MSGSPEC_VER=si.msgspec_ver,
@@ -1814,10 +1832,14 @@ def _median(values: list[float]) -> float:
 def merge_run_results(results: list[BenchmarkFinalResult]) -> BenchmarkFinalResult:
     """Combine independent process runs into one result.
 
-    Each library's number becomes the median across runs and its error bar
-    becomes the observed run-to-run range. That range is the honest measure of
-    reproducibility: the within-run spread cannot see binary/heap layout, which
-    is fixed for a process's lifetime and shifts between processes.
+    Each library's numbers become the median across runs and its error bars
+    the observed run-to-run range. That range is the honest measure of
+    reproducibility: the within-run spread cannot see binary/heap layout,
+    which is fixed for a process's lifetime and shifts between processes.
+
+    Ratios come from each run's own json-to-library ratio, since the two were
+    interleaved in one process: pairing json's fastest run with another
+    library's slowest would count a whole-process slowdown twice.
     """
     if not results:
         raise ValueError("no run results to merge")
@@ -1826,45 +1848,32 @@ def merge_run_results(results: list[BenchmarkFinalResult]) -> BenchmarkFinalResu
 
     for index_name, files_dict in merged.results.items():
         for filename, file_result in files_dict.items():
+            run_files = [
+                r.results[index_name][filename]
+                for r in results
+                if filename in r.results.get(index_name, {})
+            ]
             for group_name, target in file_result.targets.items():
+                run_targets = [
+                    f.targets[group_name] for f in run_files if group_name in f.targets
+                ]
                 for lib_name, lib_result in target.lib_results.items():
-                    values = []
-                    ok = True
-                    for other in results:
-                        other_file = other.results.get(index_name, {}).get(filename)
-                        if other_file is None:
-                            continue
-                        other_target = other_file.targets.get(group_name)
-                        if other_target is None or lib_name not in other_target:
-                            continue
-                        entry = other_target[lib_name]
-                        values.append(entry.stat)
-                        ok = ok and entry.output_ok
-                    if not values:
-                        continue
+                    # entries[0] is lib_result itself (merged is run 0), so
+                    # every list is built before lib_result is overwritten.
+                    entries = [t[lib_name] for t in run_targets if lib_name in t]
+                    values = [e.stat for e in entries]
+                    ratios = [e.ratio for e in entries]
                     lib_result.run_values = values
                     lib_result.stat = _median(values)
-                    lib_result.stat_lo = min(values)
-                    lib_result.stat_hi = max(values)
-                    lib_result.output_ok = ok
+                    lib_result.stat_lo, lib_result.stat_hi = min(values), max(values)
+                    lib_result.ratio = _median(ratios)
+                    lib_result.ratio_lo, lib_result.ratio_hi = min(ratios), max(ratios)
+                    for attr in ("minimum", "median", "mean", "p95"):
+                        setattr(lib_result, attr, _median([getattr(e, attr) for e in entries]))
+                    lib_result.output_ok = all(e.output_ok for e in entries)
 
-                if "json" not in target:
-                    continue
-                baseline = target["json"]
-                for lib_result in target.lib_results.values():
-                    lib_result.ratio = (
-                        math.inf
-                        if lib_result.stat == 0
-                        else baseline.stat / lib_result.stat
-                    )
-                    lib_result.ratio_lo = (
-                        baseline.stat_lo / lib_result.stat_hi
-                        if lib_result.stat_hi
-                        else 0.0
-                    )
-                    lib_result.ratio_hi = (
-                        baseline.stat_hi / lib_result.stat_lo
-                        if lib_result.stat_lo
-                        else 0.0
-                    )
+                # The throughput was run 0's bytes over run 0's time.
+                ssr = target.lib_results.get("ssrjson")
+                if ssr and ssr.stat:
+                    target.ssrjson_bytes_per_sec *= ssr.run_values[0] / ssr.stat
     return merged

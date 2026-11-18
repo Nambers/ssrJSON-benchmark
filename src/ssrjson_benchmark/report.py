@@ -512,18 +512,21 @@ def _collect_ratios(result: BenchmarkFinalResult, cats, index_name: str):
     return libs, [per_lib[lib] for lib in libs]
 
 
-def _parse_header(header_text: str) -> tuple[str, list[tuple[str, str]]]:
-    """Split the markdown header into its title and (key, value) rows,
-    dropping the markdown code backticks."""
-    lines = header_text.splitlines()
-    title = lines[0].removeprefix("#").strip()
-    rows = []
-    for line in lines[1:]:
-        if not line.strip():
-            continue
+def _parse_header(header_text: str) -> tuple[str, list[list[tuple[str, str]]]]:
+    """Split the markdown header into its title and its blank-line-separated
+    groups of (key, value) rows, dropping the markdown code backticks."""
+    title, *lines = header_text.splitlines()
+
+    def row(line: str) -> tuple[str, str]:
         key, _, value = line.partition(":")
-        rows.append((key.strip(), value.strip().strip("`").strip()))
-    return title, rows
+        return key.strip(), value.strip().strip("`").strip()
+
+    groups = [
+        [row(line) for line in block]
+        for nonblank, block in itertools.groupby(lines, key=lambda line: bool(line.strip()))
+        if nonblank
+    ]
+    return title.removeprefix("#").strip(), groups
 
 
 # ---------------------------------------------------------------------------
@@ -531,10 +534,9 @@ def _parse_header(header_text: str) -> tuple[str, list[tuple[str, str]]]:
 # ---------------------------------------------------------------------------
 
 
-def _header_lines(rows: list[tuple[str, str]], max_chars: int) -> list[str]:
+def _header_lines(rows: list[tuple[str, str]], max_chars: int, key_w: int) -> list[str]:
     """Monospace "Key:  value" lines, long values wrapped under the value
-    column."""
-    key_w = max((len(key) for key, _ in rows), default=0) + 2
+    column, which starts *key_w* characters in."""
     lines = []
     for key, value in rows:
         prefix = f"{key}:".ljust(key_w)
@@ -584,7 +586,7 @@ def _generate_pdf_report(
     except ImportError:
         font_map = None
 
-    title, rows = _parse_header(header_text)
+    title, header_groups = _parse_header(header_text)
     c = canvas.Canvas(output_pdf_path, pagesize=A4)
     c.setTitle(title)
     width, height = A4
@@ -619,29 +621,43 @@ def _generate_pdf_report(
         c.addOutlineEntry(text, text, level=0)
         return y - 14 - 12
 
+    def draw_rule(y: float):
+        """A thin separator 4pt above *y*."""
+        c.setStrokeColorRGB(0.85, 0.85, 0.85)
+        c.setLineWidth(0.5)
+        c.line(_PAGE_MARGIN, y + 4, width - _PAGE_MARGIN, y + 4)
+
     def place(y: float, drawing, rule: bool) -> float:
         if y - drawing.height < bottom:
             y = new_page()
         if rule:
-            c.setStrokeColorRGB(0.85, 0.85, 0.85)
-            c.setLineWidth(0.5)
-            c.line(_PAGE_MARGIN, y + 4, width - _PAGE_MARGIN, y + 4)
+            draw_rule(y)
         renderPDF.draw(drawing, c, _PAGE_MARGIN, y - drawing.height)
-        return y - drawing.height - 12
+        # A 10pt gap fits a heading and five 139pt charts on one page; 12 did not.
+        return y - drawing.height - 10
 
-    # Title and the run's environment, as a monospace block.
+    # Title and the run's environment, as monospace blocks split by thin
+    # rules, with one value column across all groups.
     c.setFillColor(_INK)
     c.setFont(_PDF_HEADING_FONT, 20)
     c.drawString(_PAGE_MARGIN, top - 20, title)
     size = 9
     max_chars = int(avail_w // c.stringWidth(" ", _PDF_TEXT_FONT, size))
-    text_obj = c.beginText(_PAGE_MARGIN, top - 20 - 24)
-    text_obj.setFont(_PDF_TEXT_FONT, size)
-    text_obj.setLeading(11.5)
-    for line in _header_lines(rows, max_chars):
-        text_obj.textLine(line)
-    c.drawText(text_obj)
-    y = text_obj.getY() - 10
+    key_w = max((len(key) for rows in header_groups for key, _ in rows), default=0) + 2
+    y = top - 20 - 24
+    for group_index, rows in enumerate(header_groups):
+        if group_index:
+            # y is the next baseline, so the rule lands between the groups.
+            draw_rule(y)
+            y -= 8
+        text_obj = c.beginText(_PAGE_MARGIN, y)
+        text_obj.setFont(_PDF_TEXT_FONT, size)
+        text_obj.setLeading(11.5)
+        for line in _header_lines(rows, max_chars, key_w):
+            text_obj.textLine(line)
+        c.drawText(text_obj)
+        y = text_obj.getY()
+    y -= 10
     c.setFillColorRGB(0, 0, 0)
 
     if summary_svg is not None:
@@ -700,9 +716,14 @@ def _breakeven(result: BenchmarkFinalResult) -> dict[tuple[str, str], float]:
     floor, and dividing two indistinguishable numbers gives break-evens below
     1, which is not a physical answer. Such files get no break-even.
 
+    Under --runs the write cost must show in every process and the break-even
+    is the median of each run's own, so one process that is slow overall
+    cannot hide a cost every process measured.
+
     Keyed by (index name, file name), the chart the number belongs on.
     """
     resolved: dict[tuple[str, str], float] = {}
+    runs = result.runs or 1
     for index_name, files_dict in result.results.items():
         if split_index_name(index_name)[1] != "hot":
             continue
@@ -712,6 +733,17 @@ def _breakeven(result: BenchmarkFinalResult) -> dict[tuple[str, str], float]:
             nw = ssr.get("dumps to bytes (no cache write)")
             c = ssr.get("dumps to bytes (cached)")
             if not (w and nw and c):
+                continue
+            # run_values skips a run that lacks the group, so only a full set
+            # is aligned run by run.
+            if runs > 1 and all(len(x.run_values) == runs for x in (w, nw, c)):
+                per_run = list(zip(w.run_values, nw.run_values, c.run_values))
+                # Writing slower than not writing, and reading the cache
+                # faster than not having one, in every process.
+                if all(wi > nwi > ci for wi, nwi, ci in per_run):
+                    resolved[index_name, file_name] = statistics.median(
+                        [(wi - ci) / (nwi - ci) for wi, nwi, ci in per_run]
+                    )
                 continue
             # Is writing measurably slower than not writing?
             if not (w.stat > nw.stat and w.stat_lo > nw.stat_hi):
