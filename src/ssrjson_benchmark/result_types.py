@@ -113,6 +113,7 @@ class BenchmarkResultPerFileTarget:
         "fresh_per_iter",
         "copy_bytes",
         "in_summary",
+        "batch",
     )
 
     def __init__(self):
@@ -128,6 +129,9 @@ class BenchmarkResultPerFileTarget:
         self.ring_size: int = 1
         self.fresh_per_iter: bool = False
         self.copy_bytes: int = 0
+        # Calls timed together per sample; above 1 when a single call is too
+        # short for the clock to resolve.
+        self.batch: int = 1
 
     def __getitem__(self, key: str) -> BenchmarkResultPerFileTargetLib:
         return self.lib_results[key]
@@ -147,6 +151,7 @@ class BenchmarkResultPerFileTarget:
         d["fresh_per_iter"] = self.fresh_per_iter
         d["copy_bytes"] = self.copy_bytes
         d["in_summary"] = self.in_summary
+        d["batch"] = self.batch
         return d
 
     @classmethod
@@ -158,6 +163,7 @@ class BenchmarkResultPerFileTarget:
         obj.fresh_per_iter = d.get("fresh_per_iter", False)
         obj.copy_bytes = d.get("copy_bytes", 0)
         obj.in_summary = d.get("in_summary", True)
+        obj.batch = d.get("batch", 1)
         reserved_keys = {
             "libraries",
             "ssrjson_bytes_per_sec",
@@ -165,6 +171,7 @@ class BenchmarkResultPerFileTarget:
             "fresh_per_iter",
             "copy_bytes",
             "in_summary",
+            "batch",
         }
         for k, v in d.items():
             if k not in reserved_keys and isinstance(v, dict):
@@ -262,6 +269,7 @@ class SystemInfo:
         "cpu_env",
         "pin_note",
         "timer_overhead_ns",
+        "timer_resolution_ns",
     )
 
     def __init__(self):
@@ -285,6 +293,7 @@ class SystemInfo:
         self.cpu_env: dict[str, str] = {}
         self.pin_note: str = ""
         self.timer_overhead_ns: int = 0
+        self.timer_resolution_ns: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -303,6 +312,7 @@ class SystemInfo:
             "cpu_env": self.cpu_env,
             "pin_note": self.pin_note,
             "timer_overhead_ns": self.timer_overhead_ns,
+            "timer_resolution_ns": self.timer_resolution_ns,
         }
 
     @classmethod
@@ -323,6 +333,7 @@ class SystemInfo:
         obj.cpu_env = d.get("cpu_env", {})
         obj.pin_note = d.get("pin_note", "")
         obj.timer_overhead_ns = d.get("timer_overhead_ns", 0)
+        obj.timer_resolution_ns = d.get("timer_resolution_ns", 0)
         return obj
 
 

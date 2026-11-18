@@ -69,6 +69,43 @@ def check_ring_rotation():
     print("ok  ring rotation: measured object is always exactly K-1 builds old")
 
 
+def check_batch():
+    """A sample of B calls must hand every call its own fresh object and keep
+    the ring rotating: each measured object was built K-B to K-1 calls
+    earlier, and a batch wider than the ring is refused."""
+    repeat, warmup = 12, 2
+    for k, batch in ((4, 4), (7, 3), (20, 2)):
+        state, seen, factory, func = _recording_pair()
+        ring = [factory() for _ in range(k)]
+        _total, times = internal.benchmark_run(
+            func=func,
+            ring=ring,
+            repeat=repeat,
+            warmup=warmup,
+            factory=factory,
+            factory_arg=None,
+            batch=batch,
+        )
+        assert len(times) == repeat, (k, batch, len(times))
+        assert len(seen) == (warmup + repeat) * batch, (k, batch, len(seen))
+        ticks = [obj[1] for obj in seen]
+        assert len(set(ticks)) == len(ticks), f"K={k} B={batch}: object measured twice"
+        # Builds completed before batch m starts: k (ring) + m * batch.
+        ages = {k + (j // batch) * batch - t for j, t in enumerate(ticks)}
+        assert min(ages) >= k - batch and max(ages) <= k - 1, (k, batch, sorted(ages))
+    try:
+        internal.benchmark_run(
+            func=func, ring=[factory()], repeat=1, warmup=0, factory=factory, batch=2
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a batch wider than a fresh-object ring was accepted")
+    assert internal.timer_resolution() > 0
+    print(f"ok  batch: fresh object per call, ring keeps rotating; clock step "
+          f"{internal.timer_resolution()}ns")
+
+
 def check_no_factory_means_no_allocation():
     """factory=None must reuse the ring untouched -- this is the ASCII path,
     where no UTF-8 cache exists and copying would be pure overhead."""
@@ -116,8 +153,9 @@ def check_hot_holds_one_copy():
         func=func, ring=ring, repeat=50, warmup=5, factory=factory, factory_arg=None
     )
     del ring
-    # The freshly built object briefly coexists with the one being replaced.
-    assert peak["n"] <= 2, f"HOT held {peak['n']} live copies, expected at most 2"
+    # The old copy is freed before the next is built: building while it is
+    # still alive carves the new one from reversed free lists.
+    assert peak["n"] == 1, f"HOT held {peak['n']} live copies, expected 1"
     print(f"ok  hot locality: peak {peak['n']} live copies")
 
 
@@ -160,30 +198,49 @@ def check_ascii_predicates():
 
 
 def check_interleaving():
-    """Every library must get samples spread across all rounds, and each keeps
-    its own ring so the rotation invariant survives the round boundaries."""
+    """Every library must get samples spread across all rounds, and all of
+    them walk one shared ring whose rotation continues across libraries and
+    round boundaries, so no object is ever measured twice.
+
+    A cold ring of fresh objects must hand out only copies from a whole-ring
+    build, never per-call refills (which reuse free lists and come out laid
+    out differently), and must free the old ring before building the next.
+    Hot keeps the per-call factory."""
     from .benchmark import BenchmarkFunction, _RingSpec, InputKind, _interleaved_measure
 
     calls: dict[str, list[int]] = {"a": [], "b": [], "c": []}
     order_log: list[str] = []
+    origins: set[str] = set()
+    live: set[int] = set()
+    peak = [0]
+    tick = [0]
+
+    class Copy(list):
+        def __init__(self, origin):
+            tick[0] += 1
+            super().__init__(["obj", tick[0]])
+            self.origin = origin
+            live.add(id(self))
+            peak[0] = max(peak[0], len(live))
+
+        def __del__(self):
+            live.discard(id(self))
 
     def make(name):
         def fn(obj):
             calls[name].append(obj[1])
+            origins.add(obj.origin)
             order_log.append(name)
             return None
 
         return fn
 
-    tick = [0]
-
     def factory(_arg=None):
-        tick[0] += 1
-        return ["obj", tick[0]]
+        return Copy("refill")
 
     class StubSpec(_RingSpec):
         def make_copy(self):
-            return factory()
+            return Copy("ring")
 
         def factory(self):  # type: ignore[override]
             return factory, None
@@ -201,9 +258,40 @@ def check_interleaving():
     # must put each library first at least once.
     firsts = {order_log[i] for i in range(len(order_log)) if i % 30 == 0}
     assert len(firsts) > 1, f"library order never rotated: {firsts}"
-    # Objects are never shared between libraries' rings.
-    assert not (set(calls["a"]) & set(calls["b"])), "rings leaked between libraries"
-    print("ok  interleaving: all libraries sampled every round, order rotates")
+    # One rotation across all libraries: every fresh object is measured once.
+    ticks = calls["a"] + calls["b"] + calls["c"]
+    assert len(set(ticks)) == len(ticks), "an object was measured twice"
+    assert origins == {"ring"}, f"cold measured {origins} copies, expected ring-built only"
+    # Each 6-call chunk outgrows the 2-slot ring, so it is split across
+    # rebuilds; holding the old ring during a rebuild would peak at 4.
+    assert peak[0] <= 2, f"cold held {peak[0]} live copies across a rebuild, expected 2"
+    # A warmup longer than the ring is clipped, never allowed to grow it.
+    peak[0] = 0
+    split = _interleaved_measure(funcs[:1], spec, ring_size=2, repeat=7, warmup=5, rounds=2)
+    assert len(split["a"]) == 7, len(split["a"])
+    assert peak[0] <= 2, f"cold warmup grew the ring to {peak[0]} copies"
+    # The first samples after every rebuild are warmup, never measured, even
+    # when the caller asked for none.
+    from .benchmark import _REBUILD_WARMUP
+
+    k = 3 * _REBUILD_WARMUP
+    calls["a"].clear()
+    start = tick[0]
+    _interleaved_measure(funcs[:1], spec, ring_size=k, repeat=40, warmup=0, rounds=4)
+    # fn sees warmup and measured calls alike, in ring order from slot 0, so
+    # every build must account for exactly _REBUILD_WARMUP extra calls.
+    builds = len({(t - start - 1) // k for t in calls["a"]})
+    extra = len(calls["a"]) - 40
+    assert extra == builds * _REBUILD_WARMUP, (
+        f"{builds} rebuilds but {extra} unmeasured calls, expected "
+        f"{_REBUILD_WARMUP} after each"
+    )
+
+    origins.clear()
+    _interleaved_measure(funcs[:1], spec, ring_size=1, repeat=5, warmup=1, rounds=1)
+    assert "refill" in origins, "hot stopped building a fresh copy per call"
+    print("ok  interleaving: all libraries sampled every round, order rotates, "
+          "cold fresh copies come from whole-ring builds")
 
 
 def check_statistics():
@@ -459,6 +547,7 @@ def main() -> int:
     check_call_path()
     check_summary_counts_documents_once()
     check_ring_rotation()
+    check_batch()
     check_no_factory_means_no_allocation()
     check_hot_holds_one_copy()
     check_ring_size_rules()

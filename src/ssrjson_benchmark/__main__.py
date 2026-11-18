@@ -95,7 +95,8 @@ def _add_benchmark_args(parser):
     )
     parser.add_argument(
         "--cold-working-set-multiple",
-        help="Cold ring size as a multiple of the last level cache, default 2.0 (float).",
+        help=f"Cold ring size as a multiple of the last level cache, default "
+        f"{DEFAULT_COLD_MULTIPLE} (float).",
         required=False,
         default=DEFAULT_COLD_MULTIPLE,
         type=float,
@@ -428,6 +429,12 @@ def _cmd_full(args) -> int:
         return 1
     result, json_path = ret
     print(f"Benchmark result saved to {json_path}")
+    if (result.runs or 1) == 1:
+        print(
+            "note: single process, so error bars cover only within-process noise, "
+            "which is several times smaller than the run-to-run spread; "
+            "contributed results use --runs 5"
+        )
 
     from .report import generate_report_markdown, generate_report_pdf
 

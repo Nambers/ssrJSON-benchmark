@@ -17,5 +17,6 @@ Locality:       {LOCALITY}
 LLC:            {LLC}
 MinIters:       {MIN_ITERS}
 Statistic:      {STATISTIC}
+Runs:           {RUNS}
 Pinned CPU:     {CPU}
 Environment:    {ENV}

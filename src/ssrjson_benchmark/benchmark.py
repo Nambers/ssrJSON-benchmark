@@ -51,12 +51,23 @@ _COMPACT = (",", ":")
 # Rationale for both budgets is in the README notes.
 DEFAULT_MIN_ITERATIONS = 100
 DEFAULT_PROCESS_GIGABYTES = 0.05
-DEFAULT_COLD_MULTIPLE = 2.0
+# At 8x the LLC every bundled file's cold dumps were within 2.5% of 16x, while
+# smaller rings were off by up to 40% (instruments.json at 1x, twitter.json
+# 14-16% at 1-2x); loads barely move.
+DEFAULT_COLD_MULTIPLE = 8.0
 DEFAULT_ROUNDS = 5
 DEFAULT_STATISTIC = "median"
 _FALLBACK_LLC_BYTES = 8 * 1024 * 1024
 _WARMUP_MIN = 20
 _WARMUP_MAX = 200
+# Unmeasured samples after every cold ring rebuild: on ctm.json the first four
+# orjson dumps and the first two ssrJSON dumps after a build ran 1.4-1.6x slow.
+_REBUILD_WARMUP = 8
+# A sample spans at least this many clock steps, so rounding to the clock
+# costs it at most ~1%.
+_BATCH_TARGET_STEPS = 100
+# How long a fresh process keeps its core busy before measuring anything.
+_SPIN_UP_SECONDS = 0.5
 # Inputs whose insignificant whitespace is below this share of their bytes get
 # no compact twin: it would only re-measure practically the same bytes.
 COMPACT_MIN_WHITESPACE = 0.01
@@ -149,6 +160,7 @@ class RunOptions:
         "rounds",
         "verify_output",
         "allow_output_mismatch",
+        "timer_resolution_ns",
     )
 
     def __init__(
@@ -162,6 +174,9 @@ class RunOptions:
         self.rounds = rounds
         self.verify_output = verify_output
         self.allow_output_mismatch = allow_output_mismatch
+        # Measured at the start of the run; decides how many calls a sample
+        # batches together.
+        self.timer_resolution_ns = 0
 
 
 class BenchmarkFunction:
@@ -484,6 +499,52 @@ def calibrate_timer_overhead(samples: int = 20000) -> int:
     return int(times[len(times) // 2])
 
 
+def spin_up(seconds: float = _SPIN_UP_SECONDS) -> None:
+    """Keep the pinned core busy before anything is measured.
+
+    An idle core can need tens of milliseconds of sustained load to reach full
+    clock (a Ryzen 9 9900X under amd-pstate-epp ran 24% slow for the first
+    75ms), far longer than the per-measurement warmup of a small input.
+    """
+    doc = b'{"a":[1,2.5,"x",true,null],"b":{"c":"d"}}'
+    deadline = time.perf_counter() + seconds
+    while time.perf_counter() < deadline:
+        json.loads(doc)
+
+
+def _estimate_call_ns(func: "BenchmarkFunction", sample) -> float:
+    """Time of one call through the same C path the measurement uses (a
+    Python loop would add a few hundred ns), enough to decide on a batch.
+    At most 16 calls, since a batch holds every result until it ends and
+    hundreds of them would spill the cache and inflate the estimate."""
+    kwargs = func.run_kwargs()
+    ring = [sample]
+    _, (one,) = internal.benchmark_run(**kwargs, ring=ring, repeat=1, warmup=1)
+    calls = min(16, 20_000 // max(one, 1))
+    if calls <= 1:
+        return float(one)
+    _, (many,) = internal.benchmark_run(
+        **kwargs, ring=ring, repeat=1, warmup=0, batch=calls
+    )
+    return many / calls
+
+
+def choose_batch(funcs: list["BenchmarkFunction"], sample, resolution_ns: int) -> int:
+    """Calls per sample, the same for every library in a group.
+
+    A sample must span _BATCH_TARGET_STEPS clock steps, because the median of
+    samples rounded to a coarse clock (100ns QueryPerformanceCounter, slow ARM
+    generic timers) snaps to a whole step: rounded to a 1us clock, a 750ns and
+    a 960ns call come out tied. The fastest library decides, so every library
+    carries the same per-call share of the timer overhead.
+    """
+    target = _BATCH_TARGET_STEPS * resolution_ns
+    fastest = min(_estimate_call_ns(f, sample) for f in funcs)
+    if fastest <= 0:
+        return 1
+    return max(1, math.ceil(target / fastest))
+
+
 # ---------------------------------------------------------------------------
 # Last level cache detection
 # ---------------------------------------------------------------------------
@@ -678,7 +739,8 @@ def _interleaved_measure(
     repeat: int,
     warmup: int,
     rounds: int,
-) -> dict[str, list[int]]:
+    batch: int = 1,
+) -> dict[str, list[float]]:
     """Measure every library, cycling them across *rounds* chunks.
 
     Running each library to completion in turn makes slow drift (thermal
@@ -687,44 +749,37 @@ def _interleaved_measure(
     library's samples over the whole wall-clock span, and rotating the order
     each round stops any library from owning a position.
 
-    Every library keeps its own ring for the whole measurement so the rotation
-    invariant survives across rounds; peak memory is therefore n_libs rings.
-    With rounds == 1 there is nothing to interleave, so rings are built and
-    released one library at a time -- that makes --rounds 1 the escape hatch
-    for datasets whose single copy is large enough that n_libs of them do not
-    fit in RAM.
+    All libraries walk one shared ring with one running call count, so every
+    measured object has been evicted by the same number of later calls
+    whichever library made them, and peak memory is a single ring however
+    many libraries take part.
+
+    *repeat* and *warmup* count samples of *batch* calls; the returned times
+    are per call.
+
+    A cold ring of fresh objects is consumed front to back and rebuilt whole
+    when the next chunk no longer fits, rather than refilled slot by slot. A
+    copy built while its neighbours are still alive is carved from pymalloc's
+    LIFO free lists, so its layout is reversed and shifts from one refill pass
+    to the next: a cold github.json dump took 13us on a ring-built copy and
+    30-40us on a refilled one, and call order decided which library got which.
+    Freeing the whole ring first empties its pools, so every rebuild lays the
+    copies out alike. Hot keeps the per-call factory, which likewise frees the
+    old copy before building the next. The first calls after a rebuild run up
+    to 1.6x slow, so a rebuild is always followed by _REBUILD_WARMUP unmeasured
+    samples.
     """
     factory, factory_arg = spec.factory()
+    consume = factory is not None and ring_size > batch
+    # A consumed ring is built on first use.
+    ring = [] if consume else spec.build_ring(ring_size)
 
-    if rounds <= 1:
-        times_seq: dict[str, list[int]] = {}
-        for bf in funcs:
-            ring = spec.build_ring(ring_size)
-            gc_was_enabled = _gc_prepare()
-            try:
-                _total, chunk_times = internal.benchmark_run(
-                    **bf.run_kwargs(),
-                    ring=ring,
-                    repeat=repeat,
-                    warmup=warmup,
-                    factory=factory,
-                    factory_arg=factory_arg,
-                )
-            finally:
-                if gc_was_enabled:
-                    gc.enable()
-                del ring
-            times_seq[bf.library_name] = chunk_times
-        return times_seq
+    rounds = max(1, min(rounds, repeat))
+    base, extra = divmod(repeat, rounds)
+    chunks = [base + (1 if i < extra else 0) for i in range(rounds)]
 
-    rings = {bf.library_name: spec.build_ring(ring_size) for bf in funcs}
-
-    base, extra = divmod(repeat, max(1, rounds))
-    chunks = [base + (1 if i < extra else 0) for i in range(max(1, rounds))]
-    chunks = [c for c in chunks if c > 0]
-
-    times: dict[str, list[int]] = {bf.library_name: [] for bf in funcs}
-    calls: dict[str, int] = {bf.library_name: 0 for bf in funcs}
+    times: dict[str, list[float]] = {bf.library_name: [] for bf in funcs}
+    calls = 0
 
     gc_was_enabled = _gc_prepare()
     try:
@@ -741,22 +796,41 @@ def _interleaved_measure(
                 else min(warmup, _WARMUP_MIN, max(2, math.ceil(chunk / 10)))
             )
             for bf in order:
-                name = bf.library_name
-                _total, chunk_times = internal.benchmark_run(
-                    **bf.run_kwargs(),
-                    ring=rings[name],
-                    repeat=chunk,
-                    warmup=round_warmup,
-                    factory=factory,
-                    factory_arg=factory_arg,
-                    start_slot=calls[name],
-                )
-                calls[name] += round_warmup + chunk
-                times[name].extend(chunk_times)
+                warm, todo = round_warmup, chunk
+                while todo:
+                    # Rebuild between chunks, or mid-chunk only when a copy is
+                    # so large that the ring cannot hold a whole chunk.
+                    if consume and (len(ring) - calls) // batch < min(
+                        warm + todo, ring_size // batch
+                    ):
+                        # Drop the old ring before building, or its pools stay
+                        # partly live and the new copies land in its free lists.
+                        ring = None
+                        ring = spec.build_ring(ring_size)
+                        calls = 0
+                        warm = max(warm, _REBUILD_WARMUP)
+                    room = (len(ring) - calls) // batch if consume else warm + todo
+                    w = min(warm, room - 1)
+                    n = min(todo, room - w)
+                    _total, part = internal.benchmark_run(
+                        **bf.run_kwargs(),
+                        ring=ring,
+                        repeat=n,
+                        warmup=w,
+                        factory=None if consume else factory,
+                        factory_arg=factory_arg,
+                        start_slot=calls,
+                        batch=batch,
+                    )
+                    calls += (w + n) * batch
+                    warm, todo = 0, todo - n
+                    if batch > 1:
+                        part = [t / batch for t in part]
+                    times[bf.library_name].extend(part)
     finally:
         if gc_was_enabled:
             gc.enable()
-        rings.clear()
+        del ring
     return times
 
 
@@ -1171,6 +1245,7 @@ def _collect_system_info(
     info.cpu_env = _collect_cpu_env(pinned_core)
     info.pin_note = pin_note
     info.timer_overhead_ns = calibrate_timer_overhead()
+    info.timer_resolution_ns = int(internal.timer_resolution())
     info.rev = _get_ssrjson_rev()
     info.ssrjson_build = _get_ssrjson_build()
     print(f"ssrJSON build: {info.ssrjson_build}")
@@ -1228,9 +1303,22 @@ def fetch_header(result: BenchmarkFinalResult) -> str:
         env.get("loadavg", "?"),
         env.get("hash_seed", "?"),
     )
-    stat_line = "{} of {} rounds; timer overhead {}ns/call".format(
-        result.statistic or "mean", result.rounds or 1, si.timer_overhead_ns
+    stat_line = "{} of {} rounds; timer overhead {}ns/call, resolution {}".format(
+        result.statistic or "mean",
+        result.rounds or 1,
+        si.timer_overhead_ns,
+        f"{si.timer_resolution_ns}ns" if si.timer_resolution_ns else "unknown",
     )
+    runs = result.runs or 1
+    if runs > 1:
+        runs_line = f"{runs} processes; error bars are the run-to-run range"
+    else:
+        # The within-process interval cannot see binary and heap layout, which
+        # move results between processes by several times its width.
+        runs_line = (
+            "1 process; error bars are the 95% CI within it and understate "
+            "run-to-run spread (contributed results use --runs 5)"
+        )
     return template.format(
         REV=si.rev,
         SSRJSON_BUILD=si.ssrjson_build,
@@ -1257,6 +1345,7 @@ def fetch_header(result: BenchmarkFinalResult) -> str:
         CPU=cpu_line,
         ENV=env_line,
         STATISTIC=stat_line,
+        RUNS=runs_line,
     )
 
 
@@ -1415,21 +1504,8 @@ def _run_benchmark(
     cur_target.libraries = [bf.library_name for bf in benchmark_group.functions]
 
     spec = ctx.make_spec(benchmark_group)
-    ring_size = compute_ring_size(
-        benchmark_group.locality,
-        spec.copy_bytes,
-        ctx.llc_bytes,
-        ctx.cold_multiple,
-        ctx.repeat,
-    )
-    cur_target.ring_size = ring_size
     cur_target.fresh_per_iter = spec.needs_fresh
     cur_target.copy_bytes = spec.copy_bytes
-    # ssrJSON's UTF-8 cache writing is globally disabled but orjson has no such
-    # switch, so on non-ASCII data the non-cached dumps groups charge orjson for
-    # a cache write ssrjson never pays. Those numbers stay on their own chart
-    # but are kept out of the aggregate summary; the (write cache) variant is
-    # the apples-to-apples comparison.
     cur_target.in_summary = not (
         benchmark_group.unfair_when_non_ascii and not ctx.object_is_ascii
     )
@@ -1451,11 +1527,27 @@ def _run_benchmark(
         for name in sorted(mismatched):
             print(f"  WARNING: {name} output mismatch in [{group_name}]")
 
+    batch = choose_batch(
+        benchmark_group.functions, spec.make_copy(), opts.timer_resolution_ns
+    )
+    ring_size = compute_ring_size(
+        benchmark_group.locality,
+        spec.copy_bytes,
+        ctx.llc_bytes,
+        ctx.cold_multiple,
+        ctx.repeat * batch,
+    )
+    if spec.needs_fresh:
+        # Every call of a sample needs its own fresh object.
+        ring_size = max(ring_size, batch)
+    cur_target.ring_size = ring_size
+    cur_target.batch = batch
+
     prefix = f"[{group_name}]"
     print(
         prefix
         + (" " * max(0, 50 - len(prefix)))
-        + f"repeat={ctx.repeat} warmup={ctx.warmup} ring={ring_size} "
+        + f"repeat={ctx.repeat} warmup={ctx.warmup} batch={batch} ring={ring_size} "
         + f"fresh={'Y' if spec.needs_fresh else 'N'} rounds={opts.rounds} "
         + f"libs={len(benchmark_group.functions)}"
     )
@@ -1466,6 +1558,7 @@ def _run_benchmark(
         ctx.repeat,
         ctx.warmup,
         opts.rounds,
+        batch,
     )
 
     for benchmark_target in benchmark_group.functions:
@@ -1659,7 +1752,9 @@ def run_benchmark(
         result.llc_source = llc_source
         result.statistic = opts.statistic
         result.rounds = opts.rounds
+        spin_up()
         result.system_info = _collect_system_info(pinned_core, pin_note)
+        opts.timer_resolution_ns = result.system_info.timer_resolution_ns
 
         # Ordered category names per index group, so the report can lay out
         # subplots without needing to rebuild the group registry.

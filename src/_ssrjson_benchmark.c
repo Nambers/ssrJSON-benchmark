@@ -63,6 +63,16 @@ usize perf_counter(void) {
            (usize)((rest * 1000000000LL) / frequency);
 }
 
+#elif defined(__APPLE__)
+#    include <time.h>
+
+/* Apple's CLOCK_MONOTONIC is derived from gettimeofday and only has
+   microsecond resolution, coarser than the fastest calls measured here.
+   CLOCK_UPTIME_RAW reads mach_absolute_time (24MHz ticks on Apple silicon). */
+usize perf_counter(void) {
+    return (usize)clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+}
+
 #else
 #    include <time.h>
 
@@ -73,6 +83,30 @@ usize perf_counter(void) {
 }
 
 #endif
+
+/**
+ * timer_resolution(samples=100000) -> int
+ *
+ * Smallest positive step between two back-to-back clock reads, in ns: the
+ * finest duration a single sample can resolve, whichever of the clock's tick
+ * and the cost of reading it is larger.
+ */
+PyObject *timer_resolution(PyObject *self, PyObject *args, PyObject *kwargs) {
+    usize samples = 100000;
+    static const char *kwlist[] = {"samples", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|K", (char **)kwlist, &samples)) {
+        return NULL;
+    }
+    usize best = 0;
+    usize prev = perf_counter();
+    for (usize i = 0; i < samples; i++) {
+        usize now = perf_counter();
+        usize step = now - prev;
+        if (step && (!best || step < best)) best = step;
+        prev = now;
+    }
+    return PyLong_FromUnsignedLongLong(best);
+}
 
 typedef struct UsizeArray {
     usize *data;
@@ -129,9 +163,21 @@ fail:
 }
 
 /**
- * Replace ring[slot] with a freshly built object. PyList_SetItem steals the new
- * reference and drops the previous one, so the old copy is released here.
- * Returns 0 on success, -1 on failure (Python exception already set).
+ * Release ring[slot], leaving None in its place. Called for every slot a sample
+ * used before any of them is rebuilt: a copy built while the old one is still
+ * alive is carved from pymalloc's free lists in reverse order and its layout
+ * degrades call after call (hot ctm.json dumps drifted from 300us to 900us),
+ * whereas freeing first empties the pools and the new copy is laid out in
+ * order every time. Returns 0 on success, -1 on failure.
+ */
+static int _ring_release(PyObject *ring, Py_ssize_t slot) {
+    return PyList_SetItem(ring, slot, Py_NewRef(Py_None));
+}
+
+/**
+ * Put a freshly built object into ring[slot] (released beforehand by
+ * _ring_release). Returns 0 on success, -1 on failure (Python exception
+ * already set).
  */
 static int _ring_refill(PyObject *ring, Py_ssize_t slot, PyObject *factory,
                         PyObject *factory_arg) {
@@ -219,60 +265,79 @@ static int _call_spec_init(CallSpec *spec, PyObject *func, PyObject *kwargs,
 }
 
 /**
- * Call func(ring[slot]) once. When `elapsed` is non-NULL the call is timed and
- * the duration in nanoseconds is stored there. Returns 0 on success, -1 on
- * failure (Python exception already set).
+ * One sample: `batch` back-to-back calls on ring slots first, first+1, ...
+ * (mod k). When `elapsed` is non-NULL the batch is timed as a whole and its
+ * duration in nanoseconds is stored there. Taking the items and freeing the
+ * results both sit outside the timed window; rebuilding the slots is left to
+ * the caller. `items` and `results` are scratch arrays of `batch` entries.
+ * Returns 0 on success, -1 on failure (Python exception already set).
  */
-static int _call_slot(CallSpec *spec, PyObject *ring, Py_ssize_t slot,
-                      usize *elapsed) {
-    /* Borrowed -> owned, so the item cannot vanish underneath the call.
-       Both the incref and the decref sit outside the timed window. */
-    PyObject *item = PyList_GET_ITEM(ring, slot);
-    Py_INCREF(item);
+static int _call_batch(CallSpec *spec, PyObject *ring, usize k, usize first,
+                       usize batch, PyObject **items, PyObject **results,
+                       usize *elapsed) {
+    /* Borrowed -> owned, so no item can vanish underneath its call. */
+    for (usize b = 0; b < batch; b++) {
+        items[b] = PyList_GET_ITEM(ring, (Py_ssize_t)((first + b) % k));
+        Py_INCREF(items[b]);
+        results[b] = NULL;
+    }
     PyObject **argv = spec->argv + 1;
     size_t nargsf = 1 | PY_VECTORCALL_ARGUMENTS_OFFSET;
-    argv[0] = item;
+    int ok = 1;
     usize start = 0, end = 0;
     if (elapsed) start = perf_counter();
-    PyObject *result = PyObject_Vectorcall(spec->func, argv, nargsf, spec->kwnames);
-    if (spec->then && result) {
-        /* Same work as `func(x).decode("utf-8")` in user code, including
-           freeing the intermediate object. */
-        PyObject *converted = PyObject_CallMethodOneArg(result, spec->then, spec->then_arg);
-        Py_DECREF(result);
-        result = converted;
+    for (usize b = 0; b < batch; b++) {
+        argv[0] = items[b];
+        PyObject *result = PyObject_Vectorcall(spec->func, argv, nargsf, spec->kwnames);
+        if (spec->then && result) {
+            /* Same work as `func(x).decode("utf-8")` in user code, including
+               freeing the intermediate object. */
+            PyObject *converted = PyObject_CallMethodOneArg(result, spec->then, spec->then_arg);
+            Py_DECREF(result);
+            result = converted;
+        }
+        results[b] = result;
+        if (unlikely(!result)) {
+            ok = 0;
+            break;
+        }
     }
     if (elapsed) end = perf_counter();
     argv[0] = NULL;
-    Py_DECREF(item);
-    if (unlikely(!result)) {
+    for (usize b = 0; b < batch; b++) {
+        Py_XDECREF(results[b]);
+        Py_DECREF(items[b]);
+    }
+    if (unlikely(!ok)) {
         if (!PyErr_Occurred())
             PyErr_SetString(PyExc_RuntimeError, "Failed to call callable");
         return -1;
     }
-    Py_DECREF(result);
     if (elapsed) *elapsed = end - start;
     return 0;
 }
 
 /**
  * benchmark_run(func, ring, repeat, warmup, factory=None, factory_arg=None,
- *               start_slot=0, kwargs=None, then=None)
+ *               start_slot=0, kwargs=None, then=None, batch=1)
  *
- * Ring-buffer benchmark. Iteration i measures
- * func(ring[(start_slot + i) % K], **kwargs), followed by
- * result.<then>("utf-8") when then is given;
- * when a factory is supplied that slot is immediately rebuilt (untimed), so
- * every measured object was built exactly K iterations earlier. K == 1
- * degenerates to "build one, measure, free" (hot); K > 1 holds a working set of
- * K live copies (cold). factory=None reuses the ring as-is and allocates
- * nothing.
+ * Ring-buffer benchmark. Call j measures
+ * func(ring[(start_slot + j) % K], **kwargs), followed by
+ * result.<then>("utf-8") when then is given. A sample is `batch` consecutive
+ * calls timed together, so calls shorter than the clock can resolve are still
+ * measured to a fraction of a tick; `repeat` and `warmup` count samples.
+ * When a factory is supplied every slot a sample used is released and then
+ * rebuilt right after it (untimed), so each measured object was built between
+ * K - batch and K - 1 calls earlier, and with batch == 1 exactly K - 1.
+ * K == batch degenerates to "free, build, measure" (hot); a larger K holds a
+ * working set of K live copies (cold). factory=None reuses the ring as-is and
+ * allocates nothing.
  *
  * start_slot lets a caller split one measurement into several rounds (to
  * interleave libraries) while keeping the rotation continuous: pass the total
  * number of calls already made against this ring.
  *
- * Returns (total_ns, [per_iter_ns]).
+ * Returns (total_ns, [per_sample_ns]); divide by batch for per-call times.
  */
 PyObject *benchmark_run(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *func;
@@ -284,14 +349,15 @@ PyObject *benchmark_run(PyObject *self, PyObject *args, PyObject *kwargs) {
     usize start_slot = 0;
     PyObject *call_kwargs = Py_None;
     PyObject *then = Py_None;
+    usize batch = 1;
     static const char *kwlist[] = {"func",       "ring",    "repeat",
                                    "warmup",     "factory", "factory_arg",
                                    "start_slot", "kwargs",  "then",
-                                   NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOKK|OOKOO", (char **)kwlist,
+                                   "batch",      NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOKK|OOKOOK", (char **)kwlist,
                                      &func, &ring, &repeat, &warmup, &factory,
                                      &factory_arg, &start_slot, &call_kwargs,
-                                     &then)) {
+                                     &then, &batch)) {
         return NULL;
     }
     if (!PyCallable_Check(func)) {
@@ -317,42 +383,60 @@ PyObject *benchmark_run(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_TypeError, "factory must be callable or None");
         return NULL;
     }
+    usize k = (usize)ring_size;
+    if (batch < 1) {
+        PyErr_SetString(PyExc_ValueError, "batch must be positive");
+        return NULL;
+    }
+    /* With fresh objects, a batch wider than the ring would measure a slot
+       twice before it is rebuilt, the second time with a warm UTF-8 cache. */
+    if (factory && batch > k) {
+        PyErr_SetString(PyExc_ValueError, "batch must not exceed the ring size when a factory is given");
+        return NULL;
+    }
 
     if (_ensure_usize_capacity(&_static_times_buf, repeat)) return NULL;
     usize *times_buf = _static_times_buf.data;
-    usize k = (usize)ring_size;
+
+    PyObject **scratch = PyMem_Calloc(2 * batch, sizeof(PyObject *));
+    if (!scratch) return PyErr_NoMemory();
+    PyObject **items = scratch, **results = scratch + batch;
 
     CallSpec spec;
     PyObject *ret = NULL;
     if (_call_spec_init(&spec, func, call_kwargs, then)) goto done;
 
-    /* Warmup walks the ring exactly like the measured loop does, so the steady
-       state reached here is the state the measurements start from. */
-    for (usize i = 0; i < warmup; i++) {
-        Py_ssize_t slot = (Py_ssize_t)((start_slot + i) % k);
-        if (unlikely(_call_slot(&spec, ring, slot, NULL))) goto done;
-        if (factory && unlikely(_ring_refill(ring, slot, factory, factory_arg)))
-            goto done;
-    }
-
+    /* Warmup walks the ring exactly like the measured loop does, and the ring
+       index continues across the warmup/measure boundary (and across rounds,
+       via start_slot): restarting at 0 would make the first measured objects
+       younger than the ring whenever warmup is not a multiple of K. */
     usize total = 0;
-    for (usize i = 0; i < repeat; i++) {
-        /* Continue the ring index across the warmup/measure boundary (and across
-           rounds, via start_slot). Restarting at 0 would make the first K
-           measured objects younger than K builds whenever warmup is not a
-           multiple of K, breaking the invariant that every measured object has
-           been evicted by exactly K-1 later builds. */
-        Py_ssize_t slot = (Py_ssize_t)((start_slot + warmup + i) % k);
-        usize elapsed;
-        if (unlikely(_call_slot(&spec, ring, slot, &elapsed))) goto done;
-        times_buf[i] = elapsed;
-        total += elapsed;
-        if (factory && unlikely(_ring_refill(ring, slot, factory, factory_arg)))
+    for (usize i = 0; i < warmup + repeat; i++) {
+        usize first = start_slot + i * batch;
+        int measured = i >= warmup;
+        usize elapsed = 0;
+        if (unlikely(_call_batch(&spec, ring, k, first, batch, items, results,
+                                 measured ? &elapsed : NULL)))
             goto done;
+        if (measured) {
+            times_buf[i - warmup] = elapsed;
+            total += elapsed;
+        }
+        if (factory) {
+            for (usize b = 0; b < batch; b++) {
+                Py_ssize_t slot = (Py_ssize_t)((first + b) % k);
+                if (unlikely(_ring_release(ring, slot))) goto done;
+            }
+            for (usize b = 0; b < batch; b++) {
+                Py_ssize_t slot = (Py_ssize_t)((first + b) % k);
+                if (unlikely(_ring_refill(ring, slot, factory, factory_arg))) goto done;
+            }
+        }
     }
     ret = _build_times_result(times_buf, repeat, total);
 done:
     _call_spec_clear(&spec);
+    PyMem_Free(scratch);
     return ret;
 }
 
@@ -533,7 +617,8 @@ PyObject *copy_json(PyObject *self, PyObject *obj) {
 static PyMethodDef ssrjson_benchmark_methods[] = {
         {"copy_unicode", (PyCFunction)copy_unicode, METH_VARARGS | METH_KEYWORDS, "Copy a unicode object without UTF-8 cache."},
         {"copy_json", (PyCFunction)copy_json, METH_O, "Deep-copy a parsed JSON value, every str without UTF-8 cache."},
-        {"benchmark_run", (PyCFunction)benchmark_run, METH_VARARGS | METH_KEYWORDS, "Ring-buffer benchmark. Returns (total_ns, [per_iter_ns])."},
+        {"benchmark_run", (PyCFunction)benchmark_run, METH_VARARGS | METH_KEYWORDS, "Ring-buffer benchmark. Returns (total_ns, [per_sample_ns])."},
+        {"timer_resolution", (PyCFunction)timer_resolution, METH_VARARGS | METH_KEYWORDS, "Smallest positive step between back-to-back clock reads, in ns."},
         {"inspect_pyunicode", (PyCFunction)inspect_pyunicode, METH_VARARGS | METH_KEYWORDS, "Inspect PyUnicode."},
         {"pyunicode_has_utf8_cache", (PyCFunction)pyunicode_has_utf8_cache, METH_VARARGS | METH_KEYWORDS, "Check if str has UTF-8 cache."},
         {NULL, NULL, 0, NULL} /* Sentinel */
