@@ -35,8 +35,9 @@ _MISMATCH = "#d63031"
 _MEDIAN = "#e31a1c"
 
 # One color per library name, so a library keeps its color in every chart
-# whichever other libraries happen to take part (pydantic_core has no loads,
-# msgspec no indented dumps). These are the hues earlier reports used, in
+# whichever other libraries happen to take part (msgspec has no indented
+# dumps, and results from before pydantic_core joined loads have none). These
+# are the hues earlier reports used, in
 # canonical display order.
 _LIB_COLORS = {
     "json": "#41b6c4",

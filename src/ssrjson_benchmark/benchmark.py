@@ -58,8 +58,7 @@ _FALLBACK_LLC_BYTES = 8 * 1024 * 1024
 _WARMUP_MIN = 20
 _WARMUP_MAX = 200
 # Inputs whose insignificant whitespace is below this share of their bytes get
-# no compact twin: the bundled fast-path probes are ~0.1% whitespace, so a twin
-# would only re-measure practically the same bytes.
+# no compact twin: it would only re-measure practically the same bytes.
 COMPACT_MIN_WHITESPACE = 0.01
 
 
@@ -831,6 +830,7 @@ def _get_benchmark_defs(localities: list[Locality]) -> tuple[BenchmarkGroup, ...
     loads_funcs = present(
         fn("json", json.loads),
         ujson and fn("ujson", ujson.loads),
+        pydantic_core and fn("pydantic_core", pydantic_core.from_json),
         msgspec and fn("msgspec", msgspec.json.decode),
         orjson and fn("orjson", orjson.loads),
         ssrjson and fn("ssrjson", ssrjson.loads),

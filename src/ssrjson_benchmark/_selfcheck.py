@@ -338,11 +338,16 @@ def check_compact_twins():
         assert json.loads(i.raw_bytes) == json.loads(src.raw_bytes), i.name
         assert len(i.raw_bytes) < len(src.raw_bytes), i.name
     names = [i.name for i in inputs]
-    # Fast-path probes are ~0.1% whitespace and must not get a twin.
-    assert "simple_object.min.json" not in names
-    assert not by_name["simple_object.json"].has_twin
     assert "twitter.min.json" in names and by_name["twitter.json"].has_twin
     assert names.index("twitter.min.json") == names.index("twitter.json") + 1
+    # An input that is already compact (under 1% whitespace) gets no twin.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        dense = pathlib.Path(tmp) / "dense.json"
+        dense.write_bytes(b'{"k":"' + b"v" * 200 + b'", "n":1}')
+        (only,) = load_inputs([dense])
+        assert not only.has_twin
     print("ok  compact twins only drop whitespace")
 
 
