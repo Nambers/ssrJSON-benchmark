@@ -32,6 +32,7 @@ benchmark = [
     "orjson",
     "msgspec",
     "ujson",
+    "pydantic_core",
     "psutil",
     "py-cpuinfo",
 ]

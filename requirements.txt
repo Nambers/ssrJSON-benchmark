@@ -2,6 +2,7 @@ matplotlib
 orjson
 ujson
 msgspec
+pydantic_core
 reportlab
 svglib
 py-cpuinfo
