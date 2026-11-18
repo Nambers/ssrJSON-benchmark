@@ -6,6 +6,7 @@ import os
 import pathlib
 import platform
 import re
+import struct
 import subprocess
 import sys
 import time
@@ -1025,6 +1026,104 @@ def _get_real_output_file_name():
     return f"benchmark_result_{rev}.json"
 
 
+def _elf_build_notes(path: str) -> list[str]:
+    """What an ELF64 extension records about its own build: the compiler its
+    .comment section names, and whether it imports __assert_fail, i.e. was
+    built without NDEBUG as Debug builds are. Empty for Mach-O and PE.
+
+    A clang build also carries the C runtime's "GCC: ..." tag in .comment,
+    so a clang entry wins.
+    """
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return []
+    if not data.startswith(b"\x7fELF\x02"):
+        return []
+    notes = [_elf_compiler(data)]
+    if b"\0__assert_fail\0" in data:
+        notes.append("assertions on: not a Release build")
+    return [n for n in notes if n]
+
+
+def _elf_compiler(data: bytes) -> str:
+    try:
+        end = "<" if data[5] == 1 else ">"
+        (shoff,) = struct.unpack_from(end + "Q", data, 0x28)
+        shentsize, shnum, shstrndx = struct.unpack_from(end + "HHH", data, 0x3A)
+
+        def section(i: int) -> tuple[int, int, int]:
+            name, _, _, _, off, size = struct.unpack_from(
+                end + "IIQQQQ", data, shoff + i * shentsize
+            )
+            return name, off, size
+
+        names = section(shstrndx)[1]
+        for i in range(shnum):
+            name, off, size = section(i)
+            if data.startswith(b".comment\0", names + name):
+                raw = data[off : off + size].split(b"\0")
+                entries = [e.decode(errors="replace") for e in raw if e]
+                clang = [e for e in entries if "clang" in e]
+                return (clang or entries or [""])[0]
+    except struct.error:
+        pass
+    return ""
+
+
+def _ssrjson_install_source(module_file: str) -> str:
+    """How the imported ssrjson was installed, from its PEP 610 / INSTALLER
+    metadata. Never includes a path or URL, since reports get published."""
+    import importlib.metadata as md
+
+    if "/nix/store/" in module_file:
+        return "nix"
+    try:
+        dist = md.distribution("ssrjson")
+    except md.PackageNotFoundError:
+        return "not installed (on sys.path)"
+    direct = json.loads(dist.read_text("direct_url.json") or "{}")
+    if direct.get("dir_info", {}).get("editable"):
+        return "editable source"
+    name = os.path.basename(module_file)
+    try:
+        installed = any(
+            os.path.samefile(dist.locate_file(f), module_file)
+            for f in dist.files or ()
+            if f.name == name
+        )
+    except OSError:
+        installed = False
+    if not installed:
+        # e.g. a build directory on PYTHONPATH shadowing the installed copy
+        return "not installed (on sys.path)"
+    if "vcs_info" in direct:
+        vcs = direct["vcs_info"]
+        return f"{vcs.get('vcs', 'vcs')} {vcs.get('commit_id', '?')[:12]}"
+    if "dir_info" in direct:
+        return "local source"
+    if "archive_info" in direct:
+        return "wheel file" if direct.get("url", "").endswith(".whl") else "sdist file"
+    installer = (dist.read_text("INSTALLER") or "").strip()
+    return f"package index ({installer})" if installer else "unknown"
+
+
+def _get_ssrjson_build() -> str:
+    """PGO, install source and compiler of the imported ssrJSON. The version
+    alone cannot tell a release wheel from a local build of that version."""
+    if not _lib_available("ssrjson"):
+        return "N/A"
+    import ssrjson
+
+    pgo = ssrjson.get_current_features().get("pgo")  # reported since 0.0.20
+    parts = [{True: "PGO", False: "no PGO"}.get(pgo, "PGO unknown")]
+    parts.append(_ssrjson_install_source(ssrjson.__file__ or ""))
+    ext = getattr(ssrjson, "ssrjson", ssrjson)
+    parts += _elf_build_notes(getattr(ext, "__file__", None) or "")
+    return ", ".join(parts)
+
+
 def _get_cpu_name() -> str:
     cpuinfo_spec = find_spec("cpuinfo")
     if cpuinfo_spec is not None:
@@ -1066,6 +1165,8 @@ def _collect_system_info(
     info.pin_note = pin_note
     info.timer_overhead_ns = calibrate_timer_overhead()
     info.rev = _get_ssrjson_rev()
+    info.ssrjson_build = _get_ssrjson_build()
+    print(f"ssrJSON build: {info.ssrjson_build}")
     info.python = sys.version
     info.os_info = f"{platform.system()} {platform.machine()} {platform.release()} {platform.version()}"
     info.chipset = _get_cpu_name()
@@ -1125,6 +1226,7 @@ def fetch_header(result: BenchmarkFinalResult) -> str:
     )
     return template.format(
         REV=si.rev,
+        SSRJSON_BUILD=si.ssrjson_build,
         TIME=si.generated_time,
         OS=si.os_info,
         PYTHON=si.python,

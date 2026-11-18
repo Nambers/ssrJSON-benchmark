@@ -1,6 +1,9 @@
 import io
+import itertools
 import math
 import os
+import statistics
+import textwrap
 from typing import TYPE_CHECKING
 
 from .benchmark import (
@@ -17,86 +20,58 @@ if TYPE_CHECKING:
 _PDF_HEADING_FONT = "Helvetica-Bold"
 _PDF_TEXT_FONT = "Courier"
 
-# ssrjson's color is always fixed
-_SSRJSON_COLOR = "#fd8d3c"
+_PAGE_MARGIN = 40
+_REPO_URL = "https://github.com/Nambers/ssrJSON-benchmark"
+# Charts are drawn at exactly the width they are printed on A4 (595.276pt)
+# inside the margins: font sizes below are real point sizes, and every chart
+# in the report shares one scale.
+_FIG_WIDTH_IN = (595.276 - 2 * _PAGE_MARGIN) / 72
 
-# Canonical library display order – libraries not in this list are appended at
-# the end in their original discovery order.
-_CANONICAL_LIB_ORDER = [
-    "json",
-    "ujson",
-    "pydantic_core",
-    "msgspec",
-    "orjson",
-    "ssrjson",
-]
+# All text is one dark ink; color is reserved for the data.
+_INK = "#1a1a1a"
+_AXIS = "#333333"
+_BASELINE = "#666666"
+_MISMATCH = "#d63031"
+_MEDIAN = "#e31a1c"
 
-# Color palette derived from the original _LIBRARIES_COLORS in reverse order
-# (excluding ssrjson). Colors are assigned sequentially to libraries enumerated
-# from bottom-to-top (i.e. reversed non-ssrjson library list).
-# One additional color is appended for when more libraries are present.
-_OTHER_COLORS_PALETTE = [
-    "#2c7fb8",  # blue   (was orjson)
-    "#8856a7",  # purple (was msgspec)
-    "#c994c7",  # light purple (was ujson)
-    "#74c476",  # green  (was json)
-    "#41b6c4",  # teal   (new extra color)
-]
-
-
-# ---------------------------------------------------------------------------
-# Dynamic color assignment
-# ---------------------------------------------------------------------------
+# One color per library name, so a library keeps its color in every chart
+# whichever other libraries happen to take part (pydantic_core has no loads,
+# msgspec no indented dumps). These are the hues earlier reports used, in
+# canonical display order.
+_LIB_COLORS = {
+    "json": "#41b6c4",
+    "ujson": "#74c476",
+    "pydantic_core": "#c994c7",
+    "msgspec": "#8856a7",
+    "orjson": "#2c7fb8",
+    "ssrjson": "#fd8d3c",
+}
+# For libraries this module does not know yet, handed out in order of first
+# appearance so they never take a known library's color.
+_EXTRA_COLORS = ["#969696", "#e377c2", "#bcbd22", "#8c564b"]
 
 
 def assign_colors(libraries: list[str]) -> dict[str, str]:
-    """Assign colors to libraries dynamically.
-
-    ssrjson always gets _SSRJSON_COLOR.
-    Other libraries are enumerated bottom-to-top (reversed order from the
-    libraries list), and each gets the next color from _OTHER_COLORS_PALETTE
-    sequentially starting at index 0.
-
-    Example: libraries = [json, msgspec, ssrjson]
-      non-ssrjson bottom-to-top: [msgspec, json]
-      msgspec -> palette[0] = #2c7fb8
-      json    -> palette[1] = #8856a7
-    """
-    colors = {}
-    non_ssrjson = [lib for lib in libraries if lib != "ssrjson"]
-    # Bottom-to-top = reversed order
-    for palette_idx, lib in enumerate(reversed(non_ssrjson)):
-        colors[lib] = _OTHER_COLORS_PALETTE[palette_idx % len(_OTHER_COLORS_PALETTE)]
-    if "ssrjson" in libraries:
-        colors["ssrjson"] = _SSRJSON_COLOR
-    return colors
+    """Color per library, independent of which other libraries are present."""
+    extra = itertools.cycle(_EXTRA_COLORS)
+    return {lib: _LIB_COLORS.get(lib) or next(extra) for lib in libraries}
 
 
-# ---------------------------------------------------------------------------
-# Plot config
-# ---------------------------------------------------------------------------
+def _order_libs(libs) -> list[str]:
+    """Canonical order; libraries this module does not know go last, by name."""
+    order = {name: idx for idx, name in enumerate(_LIB_COLORS)}
+    return sorted(set(libs), key=lambda n: (order.get(n, len(order)), n))
 
 
-class PlotConfig:
-    def __init__(
-        self,
-        bar_width: float = 0.2,
-        fig_width_per_cat: float = 3,
-        fig_height: float = 4,
-        show_std_dev: bool = True,
-        title_fontsize: int = 20,
-        ratio_fontsize: int = 9,
-        gbps_fontsize: int = 10,
-        wspace: float = 0.0,
-    ):
-        self.bar_width = bar_width
-        self.fig_width_per_cat = fig_width_per_cat
-        self.fig_height = fig_height
-        self.show_std_dev = show_std_dev
-        self.title_fontsize = title_fontsize
-        self.ratio_fontsize = ratio_fontsize
-        self.gbps_fontsize = gbps_fontsize
-        self.wspace = wspace
+def _fmt_ratio(value: float) -> str:
+    return f"{value:.1f}x" if value >= 10 else f"{value:.2f}x"
+
+
+# Per-document chart geometry, in inches: every benchmark group gets a column
+# a quarter of the page wide, filled from the left, so bars have the same width
+# in every chart and columns line up down the whole report.
+_COL_W = _FIG_WIDTH_IN / 4
+_PLOT_H = 1.12
 
 
 # ---------------------------------------------------------------------------
@@ -109,23 +84,61 @@ def _plot_prepare():
 
     mpl.use("Agg")
     mpl.rcParams["svg.fonttype"] = "none"
+    mpl.rcParams["hatch.linewidth"] = 0.6
 
 
-def _get_ratio_color(ratio: float) -> str:
-    if ratio < 1:
-        return "#d63031"
-    elif ratio == 1:
-        return "black"
-    elif ratio < 2:
-        return "#e67e22"
-    elif ratio < 4:
-        return "#f39c12"
-    elif ratio < 8:
-        return "#27ae60"
-    elif ratio < 16:
-        return "#2980b9"
+def _bar_entry(target: BenchmarkResultPerFileTarget, lib: str):
+    """(ratio, err_lo, err_hi, output_ok) for one library, or None if absent.
+
+    Error bars come from the recorded confidence interval of the summary
+    statistic (or the run-to-run range when --runs > 1). Pre-CI result files
+    fall back to a standard error of the mean derived from the per-iteration
+    standard deviation, which would otherwise overstate it by about sqrt(n).
+    """
+    if lib not in target:
+        return None
+    r = target[lib]
+    val = r.ratio
+    lo, hi = r.ratio_lo, r.ratio_hi
+    if lo > 0 and hi > 0 and hi >= lo:
+        err = (max(0.0, val - lo), max(0.0, hi - val))
+    elif r.std_dev > 0 and r.speed > 0 and r.repeat_count > 1:
+        cv = r.std_dev * r.repeat_count / r.speed
+        half = val * cv / math.sqrt(r.repeat_count)
+        err = (half, half)
     else:
-        return "#8e44ad"
+        err = (0.0, 0.0)
+    return val, err[0], err[1], r.output_ok
+
+
+def _legend_row(fig, handles, y: float):
+    """One centred row of legend entries directly under a chart's title."""
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, y),
+        ncol=len(handles),
+        frameon=False,
+        fontsize=8,
+        handlelength=1.6,
+        handletextpad=0.5,
+        columnspacing=1.6,
+        borderaxespad=0,
+        borderpad=0,
+        labelcolor=_INK,
+    )
+
+
+def _save_svg(fig) -> io.BytesIO:
+    import matplotlib.pyplot as plt
+
+    buf = io.BytesIO()
+    # No tight bbox: every chart keeps its nominal size so the PDF can place
+    # them all at the same scale.
+    fig.savefig(buf, format="svg", transparent=True)
+    buf.seek(0)
+    plt.close(fig)
+    return buf
 
 
 # ---------------------------------------------------------------------------
@@ -137,345 +150,287 @@ def plot_benchmark_svg(
     categories: list[str],
     data: dict[str, BenchmarkResultPerFileTarget],
     doc_name: str,
-    config: PlotConfig | None = None,
+    *,
+    note: str = "",
 ) -> io.BytesIO:
-    """Generate an SVG bar chart for a single file's benchmark results.
+    """Speed ratio to json for one document, one bar group per benchmark group.
 
-    Args:
-        categories: list of benchmark group names to show
-        data: mapping from group_name -> BenchmarkResultPerFileTarget
-            (this is typically the .targets dict of a BenchmarkResultPerFile,
-             or the BenchmarkResultPerFile itself accessed by group_name)
-        doc_name: title for the chart
-        config: optional PlotConfig
-    Returns:
-        BytesIO containing the SVG
-
-    Groups that were skipped for this file (e.g. the cached-dump groups on an
-    ASCII document) simply have no entry in *data* and their subplot is turned
-    off, so no separate mask is needed.
+    Every group in *categories* keeps its column, filled from the left on the
+    report-wide grid, so a group sits in the same place in every chart. Groups
+    that were skipped for this file (e.g. the cached-dump groups on an ASCII
+    document) have no entry in *data* and show "N/A" in their column. Groups
+    share one y scale so they compare by height.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
 
-    if config is None:
-        # Narrow sections (dumps to str, loads) hold two charts per row and can
-        # afford room between them; dumps to bytes packs four across and has to
-        # stay tight to fit the page width.
-        config = (
-            PlotConfig(fig_width_per_cat=5.0, wspace=0.3)
-            if len(categories) <= 2
-            else PlotConfig()
-        )
+    present = [cat for cat in categories if cat in data]
+    libs = _order_libs(lib for cat in present for lib in data[cat].libraries)
+    lib_colors = assign_colors(libs)
 
-    # Determine libraries as the union across all visible categories,
-    # then sort according to the canonical display order.
-    libs_seen: set[str] = set()
-    for cat in categories:
-        if cat in data:
-            target = (
-                data[cat]
-                if isinstance(data[cat], BenchmarkResultPerFileTarget)
-                else data[cat]
-            )
-            for lib in target.libraries:
-                libs_seen.add(lib)
-    # Sort by canonical order; unknown libs go to the end.
-    _order_map = {name: idx for idx, name in enumerate(_CANONICAL_LIB_ORDER)}
-    libs = sorted(libs_seen, key=lambda n: _order_map.get(n, len(_CANONICAL_LIB_ORDER)))
-    lib_colors = assign_colors(libs) if libs else {}
-
-    if not libs:
-        # Fallback: empty plot
-        fig, ax = plt.subplots(1, 1, figsize=(3, 4))
-        ax.text(0.5, 0.5, "No data", ha="center", va="center")
-        buf = io.BytesIO()
-        plt.savefig(buf, format="svg", bbox_inches="tight")
-        buf.seek(0)
-        plt.close(fig)
-        return buf
-
-    n = len(categories)
-    bar_width = config.bar_width
-    # Nominal canvas width. The saved SVG is padded up to this below: without
-    # it each figure is cropped to its own content, and since the PDF stretches
-    # every image to the page width, two sections with the same column count
-    # come out at different sizes purely because their tick labels differ in
-    # length.
-    target_w_in = config.fig_width_per_cat * n
-
-    fig, axs = plt.subplots(
-        1,
-        n,
-        figsize=(config.fig_width_per_cat * n, config.fig_height),
-        sharey=False,
-        tight_layout=True,
-        gridspec_kw={"wspace": config.wspace},
-    )
-    if n == 1:
-        axs = [axs]
-
-    for ax, cat in zip(axs, categories):
-        if cat not in data:
-            ax.axis("off")
-            continue
-
-        target = data[cat]
-        # Determine which libraries actually participated in this category
-        cat_libs_set = set(
-            target.libraries
-            if isinstance(target, BenchmarkResultPerFileTarget)
-            else target.keys()
-        )
-        # Only keep libs that actually participated, preserving canonical order
-        cat_libs = [name for name in libs if name in cat_libs_set]
-        cat_colors = [lib_colors.get(n, "#999999") for n in cat_libs]
-        cat_x_positions = [j * bar_width for j in range(len(cat_libs))]
-
-        if isinstance(target, dict):
-            # backward compat: dict access
-            vals = []
-            std_devs = []
-            for name in cat_libs:
-                lib_data = target.get(name, {})
-                if isinstance(lib_data, dict):
-                    vals.append(lib_data.get("ratio", 1.0))
-                    std_devs.append(lib_data.get("std_dev", 0.0))
-                else:
-                    vals.append(lib_data.ratio)
-                    std_devs.append(lib_data.std_dev)
-            ssrjson_bps = target.get("ssrjson_bytes_per_sec", 0.0)
-            if isinstance(ssrjson_bps, (dict,)):
-                ssrjson_bps = 0.0
-        else:
-            vals = []
-            std_devs = []
-            for name in cat_libs:
-                if name not in target:
-                    vals.append(None)
-                    std_devs.append(0.0)
-                    continue
-                lib_result = target[name]
-                vals.append(lib_result.ratio)
-                std_devs.append(lib_result.std_dev)
-            ssrjson_bps = target.ssrjson_bytes_per_sec
-
-        gbps = ssrjson_bps / (1024**3) if ssrjson_bps else 0.0
-
-        # Error bars come from the recorded confidence interval of the summary
-        # statistic (or the run-to-run range when --runs > 1). The old bar
-        # plotted the standard deviation of a *single iteration*, which
-        # describes the latency distribution rather than the uncertainty of the
-        # charted number and overstates it by roughly sqrt(n).
-        ratio_errors: list[tuple[float, float]] = []
-        mismatched: list[bool] = []
-        for j_idx, name in enumerate(cat_libs):
-            val = vals[j_idx]
-            if val is None or isinstance(target, dict) or name not in target:
-                ratio_errors.append((0.0, 0.0))
-                mismatched.append(False)
-                continue
-            lib_result = target[name]
-            mismatched.append(not lib_result.output_ok)
-            lo, hi = lib_result.ratio_lo, lib_result.ratio_hi
-            if lo > 0 and hi > 0 and hi >= lo:
-                ratio_errors.append((max(0.0, val - lo), max(0.0, hi - val)))
-            elif (
-                lib_result.std_dev > 0
-                and lib_result.speed > 0
-                and lib_result.repeat_count > 1
-            ):
-                # Pre-CI result files: derive a standard error of the mean so
-                # old reports do not keep showing the overstated bar.
-                cv = lib_result.std_dev * lib_result.repeat_count / lib_result.speed
-                half = val * cv / math.sqrt(lib_result.repeat_count)
-                ratio_errors.append((half, half))
-            else:
-                ratio_errors.append((0.0, 0.0))
-
-        for xi, val, col, err, bad in zip(
-            cat_x_positions, vals, cat_colors, ratio_errors, mismatched
-        ):
-            if val is None:
-                continue
-
-            ax.bar(
-                xi,
-                val,
-                width=bar_width,
-                color=col,
-                hatch="//" if bad else None,
-                edgecolor="#d63031" if bad else None,
-            )
-
-            err_lo, err_hi = err
-            if config.show_std_dev and (err_lo > 0 or err_hi > 0):
-                ax.errorbar(
-                    xi,
-                    val,
-                    yerr=[[err_lo], [err_hi]],
-                    fmt="none",
-                    ecolor="#333333",
-                    capsize=2,
-                    capthick=0.8,
-                    linewidth=0.8,
-                )
-
-            # Ratio label; "!" marks output that did not round-trip
-            label_y = val + max(err_hi, 0) + 0.05
-            ax.text(
-                xi,
-                label_y,
-                f"{val:.2f}x" + ("!" if bad else ""),
-                ha="center",
-                va="bottom",
-                fontsize=config.ratio_fontsize,
-                color="#d63031" if bad else _get_ratio_color(val),
-            )
-            # Relative half-width of the interval below the ratio label
-            if config.show_std_dev and (err_lo > 0 or err_hi > 0) and val > 0:
-                pct = (err_lo + err_hi) / 2 / val * 100
-                ax.text(
-                    xi,
-                    label_y - 0.02,
-                    f"\u00b1{pct:.1f}%",
-                    ha="center",
-                    va="top",
-                    fontsize=config.ratio_fontsize - 2,
-                    color="#888888",
-                )
-
-        if "ssrjson" in cat_libs and gbps > 0:
-            ssrjson_index = cat_libs.index("ssrjson")
-            if vals[ssrjson_index] is not None:
-                ax.text(
-                    cat_x_positions[ssrjson_index],
-                    vals[ssrjson_index] / 2,
-                    f"{gbps:.2f} GB/s",
-                    ha="center",
-                    va="center",
-                    fontsize=config.gbps_fontsize,
-                    color="#2c3e50",
-                    fontweight="bold",
-                )
-
-        ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
-        max_val_with_err = max(
-            (v + e[1] for v, e in zip(vals, ratio_errors) if v is not None),
-            default=1.0,
-        )
-        ax.set_ylim(0, max(max_val_with_err, 1.0) * 1.1)
-
-        ax.tick_params(
-            axis="both",
-            which="both",
-            left=False,
-            bottom=False,
-            labelleft=False,
-            labelbottom=False,
-        )
-        for spine in ("left", "top", "right"):
-            ax.spines[spine].set_visible(False)
-
-        ax.set_xlabel(cat, fontsize=10, labelpad=6)
-
-    fig.suptitle(
-        doc_name,
-        fontsize=config.title_fontsize,
-        fontweight="bold",
-        y=0.98,
-    )
-
-    legend_elements = [
-        plt.Line2D([0], [0], color=lib_colors.get(name, "#999999"), lw=4, label=name)
-        for name in libs
-    ]
-    fig.legend(
-        handles=legend_elements,
-        loc="upper right",
-        bbox_to_anchor=(0.98, 0.95),
-        ncol=len(libs),
-        fontsize=14,
-        frameon=False,
-    )
+    W = _FIG_WIDTH_IN
+    top_pad, title_h, legend_h = 0.03, 0.23, 0.21
+    note_h = 0.17 if note else 0.0
+    bottom_h = 0.34
+    head_h = top_pad + title_h + legend_h + note_h
+    H = head_h + _PLOT_H + bottom_h
+    fig = plt.figure(figsize=(W, H))
 
     fig.text(
         0.5,
-        0,
-        "Higher is better",
+        1 - top_pad / H,
+        doc_name,
         ha="center",
-        va="bottom",
-        fontsize=8,
-        style="italic",
-        color="#555555",
+        va="top",
+        fontsize=12,
+        fontweight="bold",
+        color=_INK,
+    )
+    if note:
+        fig.text(
+            0.5,
+            1 - (top_pad + title_h + legend_h) / H,
+            note,
+            ha="center",
+            va="top",
+            fontsize=7.5,
+            color=_INK,
+        )
+    if not libs:
+        return _save_svg(fig)
+    _legend_row(
+        fig,
+        [Line2D([0], [0], color=lib_colors[lib], lw=5, label=lib) for lib in libs],
+        1 - (top_pad + title_h) / H,
     )
 
-    buf = io.BytesIO()
-    from matplotlib.transforms import Bbox
+    entries = {cat: [_bar_entry(data[cat], lib) for lib in libs] for cat in present}
+    y_end = max(
+        [1.0] + [e[0] + e[2] for rows in entries.values() for e in rows if e is not None]
+    )
+    # Headroom above the tallest bar for its value label.
+    y_max = y_end * _PLOT_H / (_PLOT_H - 12 / 72)
 
-    tb = fig.get_tightbbox(fig.canvas.get_renderer())
-    if tb.width < target_w_in:
-        pad = (target_w_in - tb.width) / 2.0
-        tb = Bbox.from_extents(tb.x0 - pad, tb.y0, tb.x1 + pad, tb.y1)
-    plt.savefig(buf, format="svg", bbox_inches=tb)
-    buf.seek(0)
-    plt.close(fig)
-    return buf
+    # More groups than the grid has columns: narrow them to still fit.
+    col_w = min(_COL_W, W / len(categories))
+    pad = 0.07
+    for i, cat in enumerate(categories):
+        left = i * col_w + pad
+        ax = fig.add_axes((left / W, bottom_h / H, (col_w - 2 * pad) / W, _PLOT_H / H))
+        ax.set_facecolor("none")
+        for spine in ("top", "right", "left"):
+            ax.spines[spine].set_visible(False)
+        ax.spines["bottom"].set_color(_AXIS)
+        ax.spines["bottom"].set_linewidth(0.8)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xlim(-0.55, len(libs) - 0.45)
+        ax.set_ylim(0, y_max)
+        ax.annotate(
+            cat,
+            xy=(0.5, 0),
+            xycoords="axes fraction",
+            xytext=(0, -3),
+            textcoords="offset points",
+            ha="center",
+            va="top",
+            fontsize=7.5,
+            color=_INK,
+        )
+        if cat not in entries:
+            ax.text(
+                0.5,
+                0.35,
+                "N/A",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=9,
+                color=_INK,
+            )
+            continue
+        ax.axhline(1.0, color=_BASELINE, linestyle="--", linewidth=0.8, zorder=4)
+
+        for x, (lib, entry) in enumerate(zip(libs, entries[cat])):
+            if entry is None:
+                continue
+            val, err_lo, err_hi, ok = entry
+            ax.bar(
+                x,
+                val,
+                width=0.88,
+                color=lib_colors[lib],
+                hatch=None if ok else "////",
+                edgecolor=_MISMATCH if not ok else "none",
+                linewidth=0,
+            )
+            if err_lo > 0 or err_hi > 0:
+                ax.errorbar(
+                    x,
+                    val,
+                    yerr=[[err_lo], [err_hi]],
+                    fmt="none",
+                    ecolor=_AXIS,
+                    elinewidth=0.7,
+                    capsize=1.8,
+                    capthick=0.7,
+                )
+            # "!" marks output that did not round-trip
+            ax.annotate(
+                _fmt_ratio(val) + ("" if ok else "!"),
+                xy=(x, val + err_hi),
+                xytext=(0, 1.5),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=6.8,
+                color=_INK if ok else _MISMATCH,
+                fontweight="bold" if lib == "ssrjson" else "normal",
+            )
+
+        # Only set when ssrjson was measured in this group.
+        bps = data[cat].ssrjson_bytes_per_sec
+        if bps:
+            ax.annotate(
+                f"ssrjson {bps / 1024**3:.2f} GB/s",
+                xy=(0.5, 0),
+                xycoords="axes fraction",
+                xytext=(0, -13),
+                textcoords="offset points",
+                ha="center",
+                va="top",
+                fontsize=7,
+                fontweight="bold",
+                color=_INK,
+            )
+
+    return _save_svg(fig)
 
 
 # ---------------------------------------------------------------------------
-# Distribution plot
+# Summary plot
 # ---------------------------------------------------------------------------
 
 
-def plot_distribution_svg(
-    ratio_distr: list[list[float]],
-    lib_names: list[str],
-    title: str = "Speed Ratio Distribution per Library",
+def _lighten(hex_color: str, amount: float) -> str:
+    """Blend toward white. Used instead of alpha, which svglib drops."""
+    rgb = [int(hex_color[i : i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(c + (255 - c) * amount):02x}" for c in rgb)
+
+
+def plot_summary_svg(
+    panels: list[tuple[str, dict[str, tuple[list[str], list[list[float]]]]]],
 ) -> io.BytesIO:
-    """Generate a box-plot SVG of speed ratio distributions per library.
+    """Per-document speed ratios to json as box plots, one framed panel per
+    operation, stacked under one shared legend.
 
-    Colors follow the same dynamic assignment rules.
+    *panels* is ``[(title, {locality: (lib_names, ratios_per_lib)})]``, one
+    ratio per document. Each library gets one box per locality side by side,
+    the first in full color and the rest lighter. Whiskers reach the slowest
+    and fastest document, so no document is hidden as an outlier. Each panel
+    keeps its own y scale: loads and dumps ratios live on very different
+    ranges.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    from matplotlib.ticker import MaxNLocator
 
-    lib_colors = assign_colors(lib_names)
-
-    fig, ax = plt.subplots(1, 1, figsize=(3 * len(lib_names), 4), tight_layout=True)
-
-    bplot = ax.boxplot(
-        ratio_distr,
-        vert=True,
-        patch_artist=True,
-        showfliers=False,
+    libs = _order_libs(
+        lib for _, by_loc in panels for names, _ in by_loc.values() for lib in names
     )
+    lib_colors = assign_colors(libs)
+    locs = list(dict.fromkeys(loc for _, by_loc in panels for loc in by_loc))
+    n_loc = len(locs)
+    shades = [0.0, 0.55, 0.75][:n_loc] + [0.85] * max(0, n_loc - 3)
 
-    for median in bplot["medians"]:
-        median.set_color("red")
-        median.set_linewidth(2)
+    W = _FIG_WIDTH_IN
+    top_pad, legend_h = 0.04, 0.26
+    title_h, plot_h, ticks_h, gap = 0.24, 1.15, 0.22, 0.12
+    band = title_h + plot_h + ticks_h
+    H = top_pad + legend_h + len(panels) * band + (len(panels) - 1) * gap
+    left_w = 0.55
+    fig = plt.figure(figsize=(W, H))
 
-    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
-    ax.text(
-        0.5,
-        1.02,
-        "Baseline (json)",
-        ha="left",
-        va="bottom",
-        fontsize=10,
-        color="gray",
+    handles = [
+        Patch(
+            facecolor=_lighten("#7a7a7a", shade),
+            edgecolor=_AXIS,
+            linewidth=0.6,
+            label=f"{loc} cache",
+        )
+        for loc, shade in zip(locs, shades)
+        if loc
+    ]
+    handles.append(Line2D([0], [0], color=_MEDIAN, lw=2, label="median"))
+    handles.append(
+        Line2D([0], [0], color=_BASELINE, lw=0.8, ls="--", label="json (1x)")
     )
-    ax.set_xticklabels(lib_names)
-    ax.set_ylabel("Speed Ratio to json")
-    ax.yaxis.set_major_formatter("{x:.1f}x")
-    ax.set_title(title)
+    _legend_row(fig, handles, 1 - top_pad / H)
 
-    for patch, name in zip(bplot["boxes"], lib_names):
-        patch.set_facecolor(lib_colors.get(name, "#999999"))
+    box_w = 0.62 / n_loc
+    for p, (title, by_loc) in enumerate(panels):
+        band_top = H - top_pad - legend_h - p * (band + gap)
+        fig.text(
+            0.5,
+            band_top / H,
+            title,
+            ha="center",
+            va="top",
+            fontsize=10.5,
+            fontweight="bold",
+            color=_INK,
+        )
+        ax = fig.add_axes(
+            (
+                left_w / W,
+                (band_top - title_h - plot_h) / H,
+                (W - left_w - 0.05) / W,
+                plot_h / H,
+            )
+        )
+        for spine in ax.spines.values():
+            spine.set_color(_AXIS)
+            spine.set_linewidth(0.8)
+        ax.set_facecolor("none")
 
-    buf = io.BytesIO()
-    plt.savefig(buf, format="svg", bbox_inches="tight")
-    buf.seek(0)
-    plt.close(fig)
-    return buf
+        y_hi = 1.0
+        for k, loc in enumerate(locs):
+            names, ratio_lists = by_loc.get(loc, ([], []))
+            for lib, values in zip(names, ratio_lists):
+                x = libs.index(lib) + (k - (n_loc - 1) / 2) * (box_w + 0.03)
+                y_hi = max(y_hi, max(values))
+                ax.boxplot(
+                    [values],
+                    positions=[x],
+                    widths=box_w,
+                    whis=(0, 100),
+                    showfliers=False,
+                    patch_artist=True,
+                    manage_ticks=False,
+                    boxprops=dict(
+                        facecolor=_lighten(lib_colors[lib], shades[k]),
+                        edgecolor=_AXIS,
+                        linewidth=0.7,
+                    ),
+                    whiskerprops=dict(color=_AXIS, linewidth=0.8),
+                    capprops=dict(color=_AXIS, linewidth=0.8),
+                    medianprops=dict(color=_MEDIAN, linewidth=2),
+                )
+
+        ax.set_xlim(-0.6, len(libs) - 0.4)
+        ax.set_xticks(range(len(libs)))
+        ax.set_xticklabels(libs, fontsize=8.5, color=_INK)
+        ax.set_ylim(0, y_hi * 1.06)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5, steps=[1, 2, 2.5, 5, 10]))
+        ax.yaxis.set_major_formatter("{x:g}x")
+        ax.tick_params(axis="both", labelsize=8, colors=_INK, length=3, width=0.6)
+        ax.set_ylabel("Speed ratio to json", fontsize=7.5, color=_INK)
+        ax.grid(axis="y", color="#e6e6e6", linewidth=0.6)
+        ax.set_axisbelow(True)
+        ax.axhline(1.0, color=_BASELINE, linestyle="--", linewidth=0.8, zorder=1)
+
+    return _save_svg(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -524,59 +479,50 @@ def _get_cats(result: BenchmarkFinalResult) -> dict[str, list[str]]:
     return cats
 
 
-def _group_by_locality(result: BenchmarkFinalResult) -> dict[str, list[str]]:
-    """{locality: [index_name, ...]}. Pre-split result files land under ''."""
-    grouped: dict[str, list[str]] = {}
-    for index_name in _get_index_names(result):
-        _, locality = split_index_name(index_name)
-        grouped.setdefault(locality, []).append(index_name)
-    return grouped
+def _collect_ratios(result: BenchmarkFinalResult, cats, index_name: str):
+    """Per-document speed ratios to json for one summary panel.
 
-
-def _get_non_baseline_libs(result: BenchmarkFinalResult) -> list[str]:
-    """Get the union of non-baseline library names from the result data, sorted by canonical order."""
-    libs_seen: set[str] = set()
-    for files_dict in result.results.values():
-        for filename in result.filenames:
-            file_result = files_dict.get(filename)
-            if file_result is None:
-                continue
-            for target in file_result.targets.values():
-                for lib in target.libraries:
-                    if lib != "json":
-                        libs_seen.add(lib)
-    _order_map = {name: idx for idx, name in enumerate(_CANONICAL_LIB_ORDER)}
-    return sorted(libs_seen, key=lambda n: _order_map.get(n, len(_CANONICAL_LIB_ORDER)))
-
-
-def _collect_ratios(result: BenchmarkFinalResult, cats, index_names):
-    """Collect ratio distributions for non-baseline libraries over *index_names*.
-
-    Groups that were skipped for a file simply have no target entry, so no
-    separate ASCII mask is needed.
+    Each document is one point, the geometric mean of its ratios over the
+    panel's groups, so a document with more groups gets no more votes.
     """
-    non_baseline_libs = _get_non_baseline_libs(result)
-    ratios = {lib: [] for lib in non_baseline_libs}
+    files = result.results.get(index_name, {})
+    per_lib: dict[str, list[float]] = {}
 
-    for indexed_group in index_names:
-        files = result.results.get(indexed_group, {})
-        for bench_filename in result.filenames:
-            file_result = files.get(bench_filename)
-            if file_result is None:
+    for bench_filename in result.filenames:
+        file_result = files.get(bench_filename)
+        if file_result is None:
+            continue
+        doc_ratios: dict[str, list[float]] = {}
+        for cat in cats.get(index_name, []):
+            target = file_result.targets.get(cat)
+            # Groups kept out of the summary (the no-cache-write diagnostic,
+            # loads of a document whose compact twin stands in for it) keep
+            # their own chart but must not colour the headline summary.
+            if target is None or not target.in_summary:
                 continue
-            for cat in cats.get(indexed_group, []):
-                target = file_result.targets.get(cat)
-                if target is None:
-                    continue
-                # Groups whose comparison is structurally unfair for this file
-                # (ssrJSON skipping a UTF-8 cache write that orjson cannot skip)
-                # keep their own chart but must not colour the headline summary.
-                if not target.in_summary:
-                    continue
-                for lib_name in non_baseline_libs:
-                    if lib_name in target:
-                        ratios[lib_name].append(target[lib_name].ratio)
-    return non_baseline_libs, [ratios[lib] for lib in non_baseline_libs]
+            for lib_name, lib_result in target.lib_results.items():
+                ratio = lib_result.ratio
+                if lib_name != "json" and ratio > 0 and math.isfinite(ratio):
+                    doc_ratios.setdefault(lib_name, []).append(ratio)
+        for lib_name, ratios in doc_ratios.items():
+            per_lib.setdefault(lib_name, []).append(statistics.geometric_mean(ratios))
+
+    libs = _order_libs(per_lib)
+    return libs, [per_lib[lib] for lib in libs]
+
+
+def _parse_header(header_text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split the markdown header into its title and (key, value) rows,
+    dropping the markdown code backticks."""
+    lines = header_text.splitlines()
+    title = lines[0].removeprefix("#").strip()
+    rows = []
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        key, _, value = line.partition(":")
+        rows.append((key.strip(), value.strip().strip("`").strip()))
+    return title, rows
 
 
 # ---------------------------------------------------------------------------
@@ -584,22 +530,44 @@ def _collect_ratios(result: BenchmarkFinalResult, cats, index_names):
 # ---------------------------------------------------------------------------
 
 
-def _draw_page_number(c: "canvas.Canvas", page_num: int):
+def _header_lines(rows: list[tuple[str, str]], max_chars: int) -> list[str]:
+    """Monospace "Key:  value" lines, long values wrapped under the value
+    column."""
+    key_w = max((len(key) for key, _ in rows), default=0) + 2
+    lines = []
+    for key, value in rows:
+        prefix = f"{key}:".ljust(key_w)
+        lines += textwrap.wrap(
+            value,
+            max_chars,
+            initial_indent=prefix,
+            subsequent_indent=" " * key_w,
+            break_long_words=False,
+            break_on_hyphens=False,
+        ) or [prefix.rstrip()]
+    return lines
+
+
+def _draw_footer(c: "canvas.Canvas"):
     from reportlab.lib.pagesizes import A4
 
-    width, _ = A4
+    page_num = c.getPageNumber()
+    c.setFillColor(_INK)
     c.setFont("Helvetica-Oblique", 8)
-    c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawRightString(width - 40, 20, f"{page_num}")
+    c.drawRightString(A4[0] - _PAGE_MARGIN, 20, f"{page_num}")
+    if page_num == 1:
+        prefix = "This report was generated by "
+        c.drawString(_PAGE_MARGIN, 20, prefix + _REPO_URL)
+        start = _PAGE_MARGIN + c.stringWidth(prefix)
+        end = start + c.stringWidth(_REPO_URL)
+        c.linkURL(_REPO_URL, (start, 18, end, 27), relative=1)
 
 
 def _generate_pdf_report(
-    figures: list[list[io.BytesIO]],
-    section_names: list[str],
+    sections: list[tuple[str, list[io.BytesIO]]],
     header_text: str,
     output_pdf_path: str,
-    distribution_svgs: list[io.BytesIO],
-    summary_note: str | list[str] = "",
+    summary_svg: io.BytesIO | None,
 ) -> str:
     from reportlab.graphics import renderPDF
     from reportlab.lib.pagesizes import A4
@@ -615,136 +583,79 @@ def _generate_pdf_report(
     except ImportError:
         font_map = None
 
+    title, rows = _parse_header(header_text)
     c = canvas.Canvas(output_pdf_path, pagesize=A4)
+    c.setTitle(title)
     width, height = A4
+    avail_w = width - 2 * _PAGE_MARGIN
+    top, bottom = height - _PAGE_MARGIN, 36
 
-    heading = header_text.splitlines()
-    header, heading_info = heading[0].removeprefix("#").strip(), heading[1:]
-    c.setFont(_PDF_HEADING_FONT, 20)
-    text_obj = c.beginText(40, height - 50)
-    text_obj.textLine(header)
-    c.drawText(text_obj)
+    def new_page():
+        _draw_footer(c)
+        c.showPage()
+        return top
 
-    max_width = width - 80
-    wrapped_heading_info = []
-    for line in heading_info:
-        while c.stringWidth(line, _PDF_TEXT_FONT, 10) > max_width:
-            split_idx = int(max_width // c.stringWidth(" ", _PDF_TEXT_FONT, 10))
-            space_idx = line.rfind(" ", 0, split_idx)
-            if space_idx == -1:
-                space_idx = split_idx
-            wrapped_heading_info.append(line[:space_idx])
-            line = "                " + line[space_idx:].lstrip()
-        wrapped_heading_info.append(line)
-    heading_info = wrapped_heading_info
-
-    c.setFont(_PDF_TEXT_FONT, 10)
-    text_obj = c.beginText(40, height - 70)
-    for line in heading_info:
-        text_obj.textLine(line)
-    c.drawText(text_obj)
-
-    c.setFont("Helvetica-Oblique", 8)
-    text = "This report was generated by https://github.com/Nambers/ssrJSON-benchmark"
-    c.drawString(40, 20, text)
-    link_start = 40 + c.stringWidth("This report was generated by ")
-    link_end = link_start + c.stringWidth(
-        "https://github.com/Nambers/ssrJSON-benchmark"
-    )
-    c.linkURL(
-        "https://github.com/Nambers/ssrJSON-benchmark",
-        (link_start, 20, link_end, 25),
-        relative=1,
-    )
-
-    header_lines = header_text.count("\n") + 1
-    header_height = header_lines * 14 + 10
-    y_pos = height - header_height - 40
-    bottom_margin = 20
-    vertical_gap = 20
-    p = 0
-
-    # TL;DR distribution plot
-    text_obj = c.beginText()
-    text_obj.setTextOrigin(40, y_pos)
-    text_obj.setFont(_PDF_HEADING_FONT, 14)
-    text_obj.textLine("TL;DR")
-    c.drawText(text_obj)
-    c.bookmarkHorizontal("TL;DR", 0, y_pos + 20)
-    c.addOutlineEntry("TL;DR", "TL;DR", level=0)
-    y_pos -= 20
-
-    for distribution_svg in distribution_svgs:
-        distribution_svg.seek(0)
-        drawing = svg2rlg(distribution_svg, font_map=font_map)
-        avail_w = width - 80
-        scale = avail_w / drawing.width
+    def load(svg_io: io.BytesIO):
+        svg_io.seek(0)
+        drawing = svg2rlg(svg_io, font_map=font_map)
+        # Charts are drawn at print size; only shrink something too wide.
+        scale = min(1.0, avail_w / drawing.width)
         drawing.width *= scale
         drawing.height *= scale
         drawing.scale(scale, scale)
-        img_h = drawing.height
-        if y_pos - img_h - vertical_gap < bottom_margin:
-            _draw_page_number(c, p)
-            p += 1
-            c.showPage()
-            y_pos = height - bottom_margin
-        renderPDF.draw(drawing, c, 40, y_pos - img_h)
-        y_pos -= img_h + vertical_gap
+        return drawing
 
-    paragraphs = [summary_note] if isinstance(summary_note, str) else summary_note
-    paragraphs = [p for p in paragraphs if p]
-    if paragraphs:
-        c.setFont("Helvetica-Oblique", 7)
-        c.setFillColorRGB(0.35, 0.35, 0.35)
-        max_chars = 150
-        for para in paragraphs:
-            words, line = para.split(), ""
-            note_lines = []
-            for word in words:
-                if len(line) + len(word) + 1 > max_chars:
-                    note_lines.append(line)
-                    line = word
-                else:
-                    line = f"{line} {word}".strip()
-            note_lines.append(line)
-            for note_line in note_lines:
-                c.drawString(40, y_pos, note_line)
-                y_pos -= 9
-            y_pos -= 4
+    def heading(y: float, text: str, next_h: float) -> float:
+        """Draw a section heading, starting a new page first if the figure
+        *next_h* tall that follows it would not fit under it."""
+        if y - 26 - next_h < bottom:
+            y = new_page()
+        c.setFillColor(_INK)
+        c.setFont(_PDF_HEADING_FONT, 14)
+        c.drawString(_PAGE_MARGIN, y - 14, text)
         c.setFillColorRGB(0, 0, 0)
-        y_pos -= 8
+        c.bookmarkHorizontal(text, 0, y + 6)
+        c.addOutlineEntry(text, text, level=0)
+        return y - 14 - 12
 
-    for name, figs in zip(section_names, figures):
-        text_obj = c.beginText()
-        text_obj.setTextOrigin(40, y_pos)
-        text_obj.setFont(_PDF_HEADING_FONT, 14)
-        text_obj.textLine(name)
-        c.drawText(text_obj)
-        c.bookmarkHorizontal(name, 0, y_pos + 20)
-        c.addOutlineEntry(name, name, level=0)
-        y_pos -= 20
+    def place(y: float, drawing, rule: bool) -> float:
+        if y - drawing.height < bottom:
+            y = new_page()
+        if rule:
+            c.setStrokeColorRGB(0.85, 0.85, 0.85)
+            c.setLineWidth(0.5)
+            c.line(_PAGE_MARGIN, y + 4, width - _PAGE_MARGIN, y + 4)
+        renderPDF.draw(drawing, c, _PAGE_MARGIN, y - drawing.height)
+        return y - drawing.height - 12
 
-        for svg_io in figs:
-            svg_io.seek(0)
-            drawing = svg2rlg(svg_io, font_map=font_map)
-            avail_w = width - 80
-            scale = avail_w / drawing.width
-            drawing.width *= scale
-            drawing.height *= scale
-            drawing.scale(scale, scale)
-            img_h = drawing.height
-            if y_pos - img_h - vertical_gap < bottom_margin:
-                _draw_page_number(c, p)
-                p += 1
-                c.showPage()
-                y_pos = height - bottom_margin
-            c.setStrokeColorRGB(0.9, 0.9, 0.9)
-            c.setLineWidth(0.4)
-            c.line(40, y_pos, width - 40, y_pos)
-            renderPDF.draw(drawing, c, 40, y_pos - img_h)
-            y_pos -= img_h + vertical_gap
+    # Title and the run's environment, as a monospace block.
+    c.setFillColor(_INK)
+    c.setFont(_PDF_HEADING_FONT, 20)
+    c.drawString(_PAGE_MARGIN, top - 20, title)
+    size = 9
+    max_chars = int(avail_w // c.stringWidth(" ", _PDF_TEXT_FONT, size))
+    text_obj = c.beginText(_PAGE_MARGIN, top - 20 - 24)
+    text_obj.setFont(_PDF_TEXT_FONT, size)
+    text_obj.setLeading(11.5)
+    for line in _header_lines(rows, max_chars):
+        text_obj.textLine(line)
+    c.drawText(text_obj)
+    y = text_obj.getY() - 10
+    c.setFillColorRGB(0, 0, 0)
 
-    _draw_page_number(c, p)
+    if summary_svg is not None:
+        drawing = load(summary_svg)
+        y = heading(y, "TL;DR", drawing.height)
+        y = place(y, drawing, rule=False) - 6
+
+    for name, figs in sections:
+        drawings = [load(svg) for svg in figs]
+        y = heading(y, name, drawings[0].height if drawings else 0)
+        for index, drawing in enumerate(drawings):
+            y = place(y, drawing, rule=index > 0)
+        y -= 8
+
+    _draw_footer(c)
     c.save()
     return output_pdf_path
 
@@ -753,142 +664,82 @@ def _generate_pdf_report(
 # Public API
 # ---------------------------------------------------------------------------
 
-
-def _build_figures(result: BenchmarkFinalResult, cats, index_names, fmt: str):
-    """One SVG per (index group, file), in report order."""
-    figures = []
-    for indexed_group in index_names:
+def _build_figures(result: BenchmarkFinalResult, cats, fmt: str):
+    """{index name: [(file name, SVG), ...]}, in report order."""
+    breakeven = _breakeven(result)
+    figures = {}
+    for indexed_group, group_cats in cats.items():
         files = result.results.get(indexed_group, {})
-        group_figures = []
+        group_figures = figures[indexed_group] = []
         for bench_filename in result.filenames:
             file_result = files.get(bench_filename)
             if file_result is None:
                 continue
             print(f"Processing {bench_filename} [{indexed_group}]({fmt})")
-            group_figures.append(
-                plot_benchmark_svg(
-                    cats[indexed_group], file_result.targets, bench_filename
-                )
+            n = breakeven.get((indexed_group, bench_filename))
+            note = f"UTF-8 cache break-even: {n:.1f} dumps of one object" if n else ""
+            svg = plot_benchmark_svg(
+                group_cats, file_result.targets, bench_filename, note=note
             )
-        figures.append(group_figures)
+            group_figures.append((bench_filename, svg))
     return figures
 
 
-def _summary_note(result: BenchmarkFinalResult) -> str:
-    """Explain which groups the aggregate leaves out, and why.
-
-    Dropping them silently would be its own kind of dishonesty: the charts
-    still show them, so the reader needs to know the box plot does not.
-    """
-    excluded: list[str] = []
-    for files_dict in result.results.values():
-        for file_result in files_dict.values():
-            for group_name, target in file_result.targets.items():
-                if not target.in_summary and group_name not in excluded:
-                    excluded.append(group_name)
-    if not excluded:
-        return ""
-    return (
-        "Every library in this summary runs in the configuration its wheel "
-        "ships with, including ssrJSON's UTF-8 cache writing (on by default, "
-        "and not switchable at all in orjson, msgspec or pydantic_core). "
-        "'dumps to bytes' is therefore the serialize-once cost and "
-        "'dumps to bytes (cached)' the steady-state repeat-dump cost; real "
-        "workloads sit between them depending on how often the caller "
-        "re-serializes the same object. Excluded from this summary (still "
-        "charted below): "
-        + ", ".join(f"'{name}'" for name in excluded)
-        + " -- ssrJSON is forced out of its default there to isolate what the "
-        "cache write costs, which is an engine diagnostic rather than a "
-        "package comparison."
-    )
-
-
-def _breakeven_rows(result: BenchmarkFinalResult):
+def _breakeven(result: BenchmarkFinalResult) -> dict[tuple[str, str], float]:
     """Derive, per file, how many dumps of one object it takes for the UTF-8
     cache write to pay for itself.
 
     Pure arithmetic over numbers already measured, no extra benchmarking:
         N * t_nowrite  ==  t_write + (N - 1) * t_cached
 
-    Two guards, both learned the hard way. Only the hot locality is used: the
-    cached group re-dumps one live object, so pairing it with a cold
-    first-dump would mix two memory regimes in one equation. And the write
-    cost must clear its own confidence interval -- on files with few non-ASCII
-    strings it is under the noise floor, and dividing two indistinguishable
-    numbers produced break-evens below 1, which is not a physical answer. Such
-    files are reported as "write cost not measurable" instead, which is the
-    honest and also more useful statement: leave the default alone.
+    Two guards. Only the hot locality is used: the cached group re-dumps one
+    live object, so pairing it with a cold first-dump would mix two memory
+    regimes in one equation. And the write cost must clear its own confidence
+    interval -- on files with few non-ASCII strings it is under the noise
+    floor, and dividing two indistinguishable numbers gives break-evens below
+    1, which is not a physical answer. Such files get no break-even.
+
+    Keyed by (index name, file name), the chart the number belongs on.
     """
-    resolved: list[tuple[str, float]] = []
-    negligible: list[str] = []
+    resolved: dict[tuple[str, str], float] = {}
     for index_name, files_dict in result.results.items():
         if split_index_name(index_name)[1] != "hot":
             continue
         for file_name, file_result in files_dict.items():
-
-            def ssr(group_name, _fr=file_result):
-                target = _fr.targets.get(group_name)
-                if target is None:
-                    return None
-                return _fr.targets[group_name].lib_results.get("ssrjson")
-
-            w = ssr("dumps to bytes")
-            nw = ssr("dumps to bytes (no cache write)")
-            c = ssr("dumps to bytes (cached)")
+            ssr = {g: t.lib_results.get("ssrjson") for g, t in file_result.targets.items()}
+            w = ssr.get("dumps to bytes")
+            nw = ssr.get("dumps to bytes (no cache write)")
+            c = ssr.get("dumps to bytes (cached)")
             if not (w and nw and c):
                 continue
             # Is writing measurably slower than not writing?
             if not (w.stat > nw.stat and w.stat_lo > nw.stat_hi):
-                negligible.append(file_name)
                 continue
             # Does reading the cache measurably help? Without that the write
             # can never amortise and there is no crossover.
             if not (nw.stat > c.stat and nw.stat_lo > c.stat_hi):
-                negligible.append(file_name)
                 continue
-            resolved.append((file_name, (w.stat - c.stat) / (nw.stat - c.stat)))
-    resolved.sort()
-    return resolved, sorted(set(negligible))
+            resolved[index_name, file_name] = (w.stat - c.stat) / (nw.stat - c.stat)
+    return resolved
 
 
-def _breakeven_note(result: BenchmarkFinalResult) -> str:
-    resolved, negligible = _breakeven_rows(result)
-    if not resolved and not negligible:
-        return ""
-    parts = []
-    if resolved:
-        parts.append(
-            "UTF-8 cache break-even for ssrJSON -- how many times one object "
-            "must be serialized before writing the cache pays for itself: "
-            + "; ".join(f"{name} N={n:.1f}" for name, n in resolved)
-            + ". Below that, ssrjson.write_utf8_cache(False) is faster; above "
-            "it, the default wins."
-        )
-    if negligible:
-        parts.append(
-            "On " + ", ".join(negligible) + " the cache write costs less than "
-            "the measurement can resolve, so there is no crossover to report "
-            "and the default needs no thought."
-        )
-    return " ".join(parts)
+def _build_summary(result: BenchmarkFinalResult, cats) -> io.BytesIO | None:
+    """The TL;DR: one box-plot panel per operation, localities side by side.
 
-
-def _build_distributions(
-    result: BenchmarkFinalResult, cats
-) -> list[tuple[str, io.BytesIO]]:
-    """One ratio box plot per locality, so the reader can see directly how much
-    of a library's advantage comes from the cold regime."""
-    distributions = []
-    for locality, index_names in _group_by_locality(result).items():
-        libs, ratio_lists = _collect_ratios(result, cats, index_names)
-        title = "Speed Ratio Distribution per Library"
-        if locality:
-            title += f" ({locality})"
-        distributions.append(
-            (locality, plot_distribution_svg(ratio_lists, libs, title))
-        )
-    return distributions
+    Operations are not pooled: their ratios to json live on very different
+    scales, so a pooled box mostly reports how many points each operation
+    happened to contribute. Each document counts once per panel (see
+    _collect_ratios).
+    """
+    panels: dict[str, dict] = {}
+    for index_name in cats:
+        base, locality = split_index_name(index_name)
+        panels.setdefault(base, {})[locality] = _collect_ratios(result, cats, index_name)
+    if not panels:
+        return None
+    return plot_summary_svg(
+        [(print_index_name(base), per_loc) for base, per_loc in panels.items()]
+    )
 
 
 def generate_report_pdf(
@@ -903,20 +754,17 @@ def generate_report_pdf(
     report_name = f"{file}.pdf"
 
     cats = _get_cats(result)
-    index_names = _get_index_names(result)
-    figures = _build_figures(result, cats, index_names, "PDF")
-    distributions = _build_distributions(result, cats)
+    figures = _build_figures(result, cats, "PDF")
 
-    template = fetch_header(result)
-    out_path = _generate_pdf_report(
-        figures,
-        section_names=[print_index_name(name) for name in index_names],
-        header_text=template,
+    return _generate_pdf_report(
+        [
+            (print_index_name(name), [svg for _, svg in group])
+            for name, group in figures.items()
+        ],
+        header_text=fetch_header(result),
         output_pdf_path=os.path.join(out_dir, report_name),
-        distribution_svgs=[svg for _, svg in distributions],
-        summary_note=[_summary_note(result), _breakeven_note(result)],
+        summary_svg=_build_summary(result, cats),
     )
-    return out_path
 
 
 def _safe_slug(name: str) -> str:
@@ -940,41 +788,24 @@ def generate_report_markdown(
         os.makedirs(report_folder)
 
     template = fetch_header(result)
-    template += "\n\n## TL;DR\n\nTLDRIMGPLACEHOLDER\n\n"
 
     cats = _get_cats(result)
 
-    for indexed_group in _get_index_names(result):
+    summary = _build_summary(result, cats)
+    if summary is not None:
+        with open(os.path.join(report_folder, "summary.svg"), "wb") as svg_file:
+            svg_file.write(summary.getvalue())
+        template += "\n\n## TL;DR\n\n![summary](./summary.svg)\n"
+
+    figures = _build_figures(result, cats, "Markdown")
+    for indexed_group, group_figures in figures.items():
         template += f"\n\n## {print_index_name(indexed_group)}\n\n"
-        files = result.results.get(indexed_group, {})
         slug = _safe_slug(indexed_group)
-        for bench_filename in result.filenames:
-            file_result = files.get(bench_filename)
-            if file_result is None:
-                continue
-            print(f"Processing {bench_filename} [{indexed_group}](Markdown)")
-            svg_buf = plot_benchmark_svg(
-                cats[indexed_group], file_result.targets, bench_filename
-            )
+        for bench_filename, svg_buf in group_figures:
             svg_name = f"{bench_filename}_{slug}.svg"
             with open(os.path.join(report_folder, svg_name), "wb") as svg_file:
                 svg_file.write(svg_buf.getvalue())
             template += f"![{bench_filename}_{slug}](./{svg_name})\n\n"
-
-    tldr = ""
-    for locality, dist_svg in _build_distributions(result, cats):
-        svg_name = (
-            f"ratio_distribution_{locality}.svg"
-            if locality
-            else "ratio_distribution.svg"
-        )
-        with open(os.path.join(report_folder, svg_name), "wb") as svg_file:
-            svg_file.write(dist_svg.getvalue())
-        tldr += f"![ratio_distribution]({'./' + svg_name})\n\n"
-    for note in (_summary_note(result), _breakeven_note(result)):
-        if note:
-            tldr += f"> {note}\n\n"
-    template = template.replace("TLDRIMGPLACEHOLDER", tldr.strip())
 
     ret = os.path.join(report_folder, report_name)
     with open(ret, "w") as f:

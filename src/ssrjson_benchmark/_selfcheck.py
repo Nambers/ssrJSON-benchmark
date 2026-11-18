@@ -341,6 +341,48 @@ def check_call_path():
     print("ok  every library is called directly, with its own arguments")
 
 
+def check_summary_counts_documents_once():
+    """A summary panel gets one point per document, whatever its number of
+    groups, and groups kept out of the summary -- such as the loads of a
+    document whose compact twin stands in for it -- do not count."""
+    from .report import _collect_ratios
+    from .result_types import (
+        BenchmarkFinalResult,
+        BenchmarkResultPerFile,
+        BenchmarkResultPerFileTargetLib,
+    )
+
+    def doc(groups):
+        f = BenchmarkResultPerFile()
+        for group_name, (ratio, in_summary) in groups.items():
+            t = f[group_name]
+            t.in_summary = in_summary
+            t.libraries = ["json", "ssrjson"]
+            for lib, r in (("json", 1.0), ("ssrjson", ratio)):
+                lib_result = BenchmarkResultPerFileTargetLib()
+                lib_result.ratio = r
+                t[lib] = lib_result
+        return f
+
+    result = BenchmarkFinalResult()
+    result.filenames = ["a.json", "a.min.json", "b.json"]
+    result.results = {
+        "loads|hot": {
+            # Marked by the benchmark because a.min.json stands in for it.
+            "a.json": doc({"loads str": (100.0, False), "loads bytes": (100.0, False)}),
+            "a.min.json": doc({"loads str": (2.0, True), "loads bytes": (8.0, True)}),
+            # The excluded group must not move b's point.
+            "b.json": doc({"loads str": (3.0, True), "loads bytes": (50.0, False)}),
+        }
+    }
+    cats = {"loads|hot": ["loads str", "loads bytes"]}
+    libs, ratios = _collect_ratios(result, cats, "loads|hot")
+    assert libs == ["ssrjson"], libs
+    # a is represented by its twin, as geomean(2, 8) = 4; b by its one group.
+    assert sorted(round(r, 9) for r in ratios[0]) == [3.0, 4.0], ratios
+    print("ok  summary: one point per document, compact twin stands in for loads")
+
+
 def check_copy_json():
     """The fresh-object factory must return an equal value built from new
     containers and new strings, none of which carries a UTF-8 cache."""
@@ -361,9 +403,23 @@ def check_copy_json():
     print("ok  copy_json: equal value, new containers and strings, no UTF-8 cache")
 
 
+def check_build_info():
+    """The compiler comes from the extension's own ELF .comment section."""
+    import sys
+
+    from .benchmark import _elf_build_notes, _get_ssrjson_build
+
+    if sys.platform.startswith("linux"):
+        assert _elf_build_notes(internal.__file__), internal.__file__
+    assert _elf_build_notes(__file__) == []
+    print(f"ok  ssrjson build: {_get_ssrjson_build()}")
+
+
 def main() -> int:
     check_copy_json()
+    check_build_info()
     check_call_path()
+    check_summary_counts_documents_once()
     check_ring_rotation()
     check_no_factory_means_no_allocation()
     check_hot_holds_one_copy()

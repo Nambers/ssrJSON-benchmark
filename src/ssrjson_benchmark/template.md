@@ -1,6 +1,7 @@
 # ssrJSON benchmark Report
 
 REV:            `{REV}`
+ssrJSON build:  `{SSRJSON_BUILD}`
 Python:         `{PYTHON}`
 Orjson:         `{ORJSON_VER}`
 MsgSpec:        `{MSGSPEC_VER}`

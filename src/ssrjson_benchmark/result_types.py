@@ -248,6 +248,7 @@ class SystemInfo:
 
     __slots__ = (
         "rev",
+        "ssrjson_build",
         "python",
         "os_info",
         "chipset",
@@ -265,6 +266,8 @@ class SystemInfo:
 
     def __init__(self):
         self.rev: str = ""
+        # PGO, install source and compiler: same-version builds can differ.
+        self.ssrjson_build: str = "N/A"
         self.python: str = ""
         self.os_info: str = ""
         self.chipset: str = ""
@@ -286,6 +289,7 @@ class SystemInfo:
     def to_dict(self) -> dict:
         return {
             "rev": self.rev,
+            "ssrjson_build": self.ssrjson_build,
             "python": self.python,
             "os_info": self.os_info,
             "chipset": self.chipset,
@@ -305,6 +309,7 @@ class SystemInfo:
     def from_dict(cls, d: dict) -> "SystemInfo":
         obj = cls()
         obj.rev = d.get("rev", "")
+        obj.ssrjson_build = d.get("ssrjson_build", "N/A")
         obj.python = d.get("python", "")
         obj.os_info = d.get("os_info", "")
         obj.chipset = d.get("chipset", "")
