@@ -31,6 +31,14 @@ python -m ssrjson_benchmark full -h # Run benchmark + generate PDF report in one
 # python -m ssrjson_benchmark print -h # Generate report from previously saved JSON benchmark result
 ```
 
+To contribute a result, run the defaults in five fresh processes (about 20 minutes on a Ryzen 9 9900X):
+
+```bash
+python -m ssrjson_benchmark full --runs 5
+```
+
+For a quick local check, `python -m ssrjson_benchmark full --locality hot` takes about two minutes.
+
 ## Notes
 
 * Libraries benchmarked are json, [ujson](https://github.com/ultrajson/ultrajson), [pydantic](https://github.com/pydantic/pydantic), [msgspec](https://github.com/jcrist/msgspec), [orjson](https://github.com/ijl/orjson) and [ssrJSON](https://github.com/Antares0982/ssrjson); where a library only produces the other output type, a single `decode("utf-8")` / `encode("utf-8")` is appended rather than dropping it from the comparison.
@@ -41,6 +49,8 @@ python -m ssrjson_benchmark full -h # Run benchmark + generate PDF report in one
 * An LLC source of `fallback` in the header means detection failed and cold results are not comparable across machines, so set `--llc-bytes` explicitly.
 * `--bin-process-megabytes` is deprecated and ignored, because it used to control how cold the measured object was through what looked like a memory-only knob.
 * `--min-iterations` exists because an equal-bytes budget alone leaves the largest inputs with only a few dozen samples.
+* The defaults are 100 iterations and 0.05 GiB per test case because beyond ~60 samples the median's interval is a fraction of a percent hot (about a percent cold), far below the run-to-run spread that `--runs` exposes, so `--min-iterations 200 --process-gigabytes 0.1` restores the previous, ~3x slower budget.
+* Contributed results use `--runs 5` rather than a larger `--process-gigabytes`, because run-to-run spread (median 1.7%, p90 3.3% across three processes) is about eight times the within-process interval, and only more processes reduce it.
 * Pinning is on by default because an unpinned process on a hybrid CPU can land on an efficiency core and invert which library wins, not merely add noise.
 * `min`, `median`, `mean` and `p95` are all recorded in the JSON, since mean and min genuinely disagree about the winner when two libraries have different noise profiles.
 * Error bars are the distribution-free confidence interval of the charted statistic, or the run-to-run range under `--runs > 1`, not the standard deviation of a single iteration.
@@ -49,6 +59,7 @@ python -m ssrjson_benchmark full -h # Run benchmark + generate PDF report in one
 * Every library's output is verified to round-trip before it is timed, so a mismatch aborts unless `--allow-output-mismatch` is passed, which hatches and marks the offending bars instead.
 * The stdlib `json` baseline uses `separators=(",", ":")`, because its default separators emit ~7% more bytes and inflated every ratio measured against it.
 * Only the call itself is timed: building the input and freeing the result both sit outside the measured window.
+* The C timing loop makes each library's call itself, with that library's own arguments, because wrapping only the libraries that need an argument or a conversion in a Python lambda charged them ~10ns that the others skipped, a sizeable share of a small call.
 * Using your own dataset needs no code changes, just point `-d` at a directory of `*.json` files and everything per-file is derived from the data.
 * Data the libraries disagree about aborts the run, which in practice means integers wider than 64 bits (rejected by orjson and ssrJSON) and `NaN`/`Infinity` (rejected by orjson and msgspec).
 * Peak memory is `library_count x ring_size x one_copy` because interleaving keeps every library's ring alive at once, and `--rounds 1` trades the interleaving protection for one ring at a time (measured 400MiB -> 67MiB on twitter.json).

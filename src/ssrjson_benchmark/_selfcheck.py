@@ -162,7 +162,7 @@ def check_ascii_predicates():
 def check_interleaving():
     """Every library must get samples spread across all rounds, and each keeps
     its own ring so the rotation invariant survives the round boundaries."""
-    from .benchmark import _RingSpec, InputKind, _interleaved_measure
+    from .benchmark import BenchmarkFunction, _RingSpec, InputKind, _interleaved_measure
 
     calls: dict[str, list[int]] = {"a": [], "b": [], "c": []}
     order_log: list[str] = []
@@ -190,7 +190,7 @@ def check_interleaving():
 
     spec = StubSpec(InputKind.OBJECT, ["obj", 0], True, 1)
 
-    funcs = [(n, make(n)) for n in ("a", "b", "c")]
+    funcs = [BenchmarkFunction(n, make(n)) for n in ("a", "b", "c")]
     times = _interleaved_measure(
         funcs, spec, ring_size=2, repeat=30, warmup=0, rounds=5
     )
@@ -274,16 +274,16 @@ def check_cache_write_is_on_by_default():
 
         def ssr_of(group_name):
             group = by_name[group_name]
-            return next(f.func for f in group.functions if f.library_name == "ssrjson")
+            return next(f for f in group.functions if f.library_name == "ssrjson")
 
         # Default group: writes the cache, like orjson does.
-        obj = _fresh(sample)
+        obj = internal.copy_json(sample)
         ssr_of("dumps to bytes")(obj)
         assert internal.pyunicode_has_utf8_cache(obj["k"]), (
             "default dumps_to_bytes did not populate the UTF-8 cache"
         )
         # Diagnostic group: explicitly does not.
-        obj = _fresh(sample)
+        obj = internal.copy_json(sample)
         ssr_of("dumps to bytes (no cache write)")(obj)
         assert not internal.pyunicode_has_utf8_cache(obj["k"]), (
             "no-cache-write group still populated the UTF-8 cache"
@@ -291,12 +291,6 @@ def check_cache_write_is_on_by_default():
     finally:
         ssrjson.write_utf8_cache(old)
     print("ok  default groups write the UTF-8 cache, diagnostic group does not")
-
-
-def _fresh(obj):
-    from .benchmark import _recursive_copy_obj
-
-    return _recursive_copy_obj(obj)
 
 
 def check_baseline_is_compact():
@@ -313,14 +307,63 @@ def check_baseline_is_compact():
         if group is None:
             continue
         baseline = next(f for f in group.functions if f.library_name == "json")
-        out = baseline.func(sample)
+        out = baseline(sample)
         text = out.decode() if isinstance(out, bytes) else out
         assert ", " not in text and ": " not in text, f"{group_name}: {text}"
         assert _json.loads(text) == sample
     print("ok  stdlib baseline emits compact separators")
 
 
+def check_call_path():
+    """The C loop must make exactly the call user code makes -- keyword
+    arguments included, then the decode/encode -- and no library may be
+    wrapped in a Python frame that another library skips."""
+    from .benchmark import BenchmarkFunction, Locality, _get_benchmark_defs
+
+    seen = []
+
+    class Out:
+        def decode(self, encoding):
+            seen.append(("decode", encoding))
+            return "s"
+
+    def func(obj, **kwargs):
+        seen.append(("call", obj, kwargs))
+        return Out()
+
+    bf = BenchmarkFunction("stub", func, then="decode", indent=2, option=5)
+    internal.benchmark_run(**bf.run_kwargs(), ring=[7], repeat=2, warmup=1)
+    assert seen == [("call", 7, {"indent": 2, "option": 5}), ("decode", "utf-8")] * 3, seen
+    for group in _get_benchmark_defs([Locality.HOT]):
+        for f in group.functions:
+            name = getattr(f.func, "__name__", "")
+            assert name != "<lambda>", (group.group_name, f.library_name)
+    print("ok  every library is called directly, with its own arguments")
+
+
+def check_copy_json():
+    """The fresh-object factory must return an equal value built from new
+    containers and new strings, none of which carries a UTF-8 cache."""
+    from .benchmark import _lib_available, ensure_utf8_cache
+
+    src = {"中文键": ["值", {"k": "ascii", "n": [1, 2.5, None, True]}], "a": "é" * 40}
+    if _lib_available("orjson"):
+        ensure_utf8_cache(src)  # gives every non-ASCII str in src a UTF-8 cache
+    out = internal.copy_json(src)
+    assert out == src and out is not src
+    assert out["中文键"] is not src["中文键"] and out["中文键"][1] is not src["中文键"][1]
+    for key, value in out.items():
+        assert key is not next(k for k in src if k == key)
+        if isinstance(value, str):
+            assert not internal.pyunicode_has_utf8_cache(value), key
+    assert not internal.pyunicode_has_utf8_cache(next(iter(out)))
+    assert list(out) == list(src), "key order must survive the copy"
+    print("ok  copy_json: equal value, new containers and strings, no UTF-8 cache")
+
+
 def main() -> int:
+    check_copy_json()
+    check_call_path()
     check_ring_rotation()
     check_no_factory_means_no_allocation()
     check_hot_holds_one_copy()

@@ -145,21 +145,105 @@ static int _ring_refill(PyObject *ring, Py_ssize_t slot, PyObject *factory,
     return 0;
 }
 
+/* At most this many keyword arguments per measured call. */
+#define CALL_MAX_KWARGS 8
+
+/**
+ * How one library is called: func(item, **kwargs), then optionally
+ * result.<then>("utf-8"). Every library goes through this same C path, so no
+ * library pays for a Python-level wrapper frame that another one skips.
+ *
+ * argv[0] is scratch space for PY_VECTORCALL_ARGUMENTS_OFFSET, argv[1] is the
+ * measured object and argv[2..] are the keyword values named by kwnames.
+ */
+typedef struct CallSpec {
+    PyObject *func;
+    PyObject *kwnames; /* tuple of keyword names, or NULL */
+    PyObject *argv[2 + CALL_MAX_KWARGS];
+    PyObject *then;     /* method name, or NULL */
+    PyObject *then_arg; /* "utf-8", owned */
+} CallSpec;
+
+static void _call_spec_clear(CallSpec *spec) {
+    Py_CLEAR(spec->kwnames);
+    Py_CLEAR(spec->then_arg);
+    for (int i = 0; i < 2 + CALL_MAX_KWARGS; i++) Py_CLEAR(spec->argv[i]);
+}
+
+/**
+ * Fill *spec* from Python-level arguments. kwargs may be None or a dict with
+ * str keys; then may be None or a method name, called with "utf-8".
+ * Returns 0 on success, -1 on failure (Python exception set). Either way the
+ * caller releases *spec* with _call_spec_clear().
+ */
+static int _call_spec_init(CallSpec *spec, PyObject *func, PyObject *kwargs,
+                           PyObject *then) {
+    memset(spec, 0, sizeof(*spec));
+    spec->func = func;
+    if (kwargs != Py_None) {
+        if (!PyDict_Check(kwargs)) {
+            PyErr_SetString(PyExc_TypeError, "kwargs must be a dict or None");
+            return -1;
+        }
+        Py_ssize_t n = PyDict_GET_SIZE(kwargs);
+        if (n > CALL_MAX_KWARGS) {
+            PyErr_SetString(PyExc_ValueError, "too many keyword arguments");
+            return -1;
+        }
+        if (n > 0) {
+            spec->kwnames = PyTuple_New(n);
+            if (!spec->kwnames) return -1;
+            Py_ssize_t pos = 0, i = 0;
+            PyObject *key, *value;
+            while (PyDict_Next(kwargs, &pos, &key, &value)) {
+                if (!PyUnicode_Check(key)) {
+                    PyErr_SetString(PyExc_TypeError, "kwargs keys must be str");
+                    return -1;
+                }
+                PyTuple_SET_ITEM(spec->kwnames, i, Py_NewRef(key));
+                spec->argv[2 + i] = Py_NewRef(value);
+                i++;
+            }
+        }
+    }
+    if (then != Py_None) {
+        if (!PyUnicode_Check(then)) {
+            PyErr_SetString(PyExc_TypeError, "then must be a str or None");
+            return -1;
+        }
+        spec->then = then;
+        spec->then_arg = PyUnicode_InternFromString("utf-8");
+        if (!spec->then_arg) return -1;
+    }
+    return 0;
+}
+
 /**
  * Call func(ring[slot]) once. When `elapsed` is non-NULL the call is timed and
  * the duration in nanoseconds is stored there. Returns 0 on success, -1 on
  * failure (Python exception already set).
  */
-static int _call_slot(PyObject *func, PyObject *ring, Py_ssize_t slot,
+static int _call_slot(CallSpec *spec, PyObject *ring, Py_ssize_t slot,
                       usize *elapsed) {
     /* Borrowed -> owned, so the item cannot vanish underneath the call.
        Both the incref and the decref sit outside the timed window. */
     PyObject *item = PyList_GET_ITEM(ring, slot);
     Py_INCREF(item);
+    PyObject **argv = spec->argv + 1;
+    size_t nargsf = 1 | PY_VECTORCALL_ARGUMENTS_OFFSET;
+    argv[0] = item;
     usize start = 0, end = 0;
     if (elapsed) start = perf_counter();
-    PyObject *result = PyObject_CallOneArg(func, item);
+    PyObject *result = PyObject_Vectorcall(spec->func, argv, nargsf, spec->kwnames);
+    if (spec->then && result) {
+        /* Same work as `func(x).decode("utf-8")` in user code, including
+           freeing the intermediate object. */
+        PyObject *converted = PyObject_CallMethodOneArg(result, spec->then, spec->then_arg);
+        Py_DECREF(result);
+        result = converted;
+    }
     if (elapsed) end = perf_counter();
+    argv[0] = NULL;
     Py_DECREF(item);
     if (unlikely(!result)) {
         if (!PyErr_Occurred())
@@ -173,9 +257,11 @@ static int _call_slot(PyObject *func, PyObject *ring, Py_ssize_t slot,
 
 /**
  * benchmark_run(func, ring, repeat, warmup, factory=None, factory_arg=None,
- *               start_slot=0)
+ *               start_slot=0, kwargs=None, then=None)
  *
- * Ring-buffer benchmark. Iteration i measures func(ring[(start_slot + i) % K]);
+ * Ring-buffer benchmark. Iteration i measures
+ * func(ring[(start_slot + i) % K], **kwargs), followed by
+ * result.<then>("utf-8") when then is given;
  * when a factory is supplied that slot is immediately rebuilt (untimed), so
  * every measured object was built exactly K iterations earlier. K == 1
  * degenerates to "build one, measure, free" (hot); K > 1 holds a working set of
@@ -196,12 +282,16 @@ PyObject *benchmark_run(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *factory = Py_None;
     PyObject *factory_arg = Py_None;
     usize start_slot = 0;
-    static const char *kwlist[] = {"func",        "ring",    "repeat",
-                                   "warmup",      "factory", "factory_arg",
-                                   "start_slot",  NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOKK|OOK", (char **)kwlist,
+    PyObject *call_kwargs = Py_None;
+    PyObject *then = Py_None;
+    static const char *kwlist[] = {"func",       "ring",    "repeat",
+                                   "warmup",     "factory", "factory_arg",
+                                   "start_slot", "kwargs",  "then",
+                                   NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOKK|OOKOO", (char **)kwlist,
                                      &func, &ring, &repeat, &warmup, &factory,
-                                     &factory_arg, &start_slot)) {
+                                     &factory_arg, &start_slot, &call_kwargs,
+                                     &then)) {
         return NULL;
     }
     if (!PyCallable_Check(func)) {
@@ -232,13 +322,17 @@ PyObject *benchmark_run(PyObject *self, PyObject *args, PyObject *kwargs) {
     usize *times_buf = _static_times_buf.data;
     usize k = (usize)ring_size;
 
+    CallSpec spec;
+    PyObject *ret = NULL;
+    if (_call_spec_init(&spec, func, call_kwargs, then)) goto done;
+
     /* Warmup walks the ring exactly like the measured loop does, so the steady
        state reached here is the state the measurements start from. */
     for (usize i = 0; i < warmup; i++) {
         Py_ssize_t slot = (Py_ssize_t)((start_slot + i) % k);
-        if (unlikely(_call_slot(func, ring, slot, NULL))) return NULL;
+        if (unlikely(_call_slot(&spec, ring, slot, NULL))) goto done;
         if (factory && unlikely(_ring_refill(ring, slot, factory, factory_arg)))
-            return NULL;
+            goto done;
     }
 
     usize total = 0;
@@ -250,13 +344,16 @@ PyObject *benchmark_run(PyObject *self, PyObject *args, PyObject *kwargs) {
            been evicted by exactly K-1 later builds. */
         Py_ssize_t slot = (Py_ssize_t)((start_slot + warmup + i) % k);
         usize elapsed;
-        if (unlikely(_call_slot(func, ring, slot, &elapsed))) return NULL;
+        if (unlikely(_call_slot(&spec, ring, slot, &elapsed))) goto done;
         times_buf[i] = elapsed;
         total += elapsed;
         if (factory && unlikely(_ring_refill(ring, slot, factory, factory_arg)))
-            return NULL;
+            goto done;
     }
-    return _build_times_result(times_buf, repeat, total);
+    ret = _build_times_result(times_buf, repeat, total);
+done:
+    _call_spec_clear(&spec);
+    return ret;
 }
 
 PyObject *inspect_pyunicode(PyObject *self, PyObject *args, PyObject *kwargs) {
@@ -336,22 +433,7 @@ fail:;
     return NULL;
 }
 
-/**
- * copy_unicode(unicode) -> str
- *
- * Copy a str without its UTF-8 cache. Doubles as the per-iteration factory for
- * the `loads str` benchmarks, so it is called with a single positional arg.
- */
-PyObject *copy_unicode(PyObject *self, PyObject *args, PyObject *kwargs) {
-    PyObject *unicode;
-    static const char *kwlist[] = {"unicode", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O", (char **)kwlist, &unicode)) {
-        return NULL;
-    }
-    if (!PyUnicode_CheckExact(unicode)) {
-        PyErr_SetString(PyExc_TypeError, "Argument must be str, not other types or subclass of str");
-        return NULL;
-    }
+static PyObject *_copy_unicode_impl(PyObject *unicode) {
     int kind = PyUnicode_KIND(unicode);
     Py_UCS4 max_char;
     if (kind == 4) {
@@ -371,8 +453,86 @@ PyObject *copy_unicode(PyObject *self, PyObject *args, PyObject *kwargs) {
     return unicode_copy;
 }
 
+/**
+ * copy_unicode(unicode) -> str
+ *
+ * Copy a str without its UTF-8 cache. Doubles as the per-iteration factory for
+ * the `loads str` benchmarks, so it is called with a single positional arg.
+ */
+PyObject *copy_unicode(PyObject *self, PyObject *args, PyObject *kwargs) {
+    PyObject *unicode;
+    static const char *kwlist[] = {"unicode", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O", (char **)kwlist, &unicode)) {
+        return NULL;
+    }
+    if (!PyUnicode_CheckExact(unicode)) {
+        PyErr_SetString(PyExc_TypeError, "Argument must be str, not other types or subclass of str");
+        return NULL;
+    }
+    return _copy_unicode_impl(unicode);
+}
+
+static PyObject *_copy_json_impl(PyObject *obj);
+
+static PyObject *_copy_json_list(PyObject *obj) {
+    Py_ssize_t n = PyList_GET_SIZE(obj);
+    PyObject *out = PyList_New(n);
+    if (!out) return NULL;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *item = _copy_json_impl(PyList_GET_ITEM(obj, i));
+        if (!item) {
+            Py_DECREF(out);
+            return NULL;
+        }
+        PyList_SET_ITEM(out, i, item);
+    }
+    return out;
+}
+
+static PyObject *_copy_json_dict(PyObject *obj) {
+    PyObject *out = PyDict_New();
+    if (!out) return NULL;
+    Py_ssize_t pos = 0;
+    PyObject *key, *value;
+    while (PyDict_Next(obj, &pos, &key, &value)) {
+        PyObject *k = _copy_json_impl(key);
+        PyObject *v = k ? _copy_json_impl(value) : NULL;
+        int rc = v ? PyDict_SetItem(out, k, v) : -1;
+        Py_XDECREF(k);
+        Py_XDECREF(v);
+        if (rc < 0) {
+            Py_DECREF(out);
+            return NULL;
+        }
+    }
+    return out;
+}
+
+/* Deep copy of a parsed JSON value: new dicts and lists, every str (keys
+   included) copied without its UTF-8 cache, other scalars shared. */
+static PyObject *_copy_json_impl(PyObject *obj) {
+    if (PyUnicode_CheckExact(obj)) return _copy_unicode_impl(obj);
+    int is_list = PyList_CheckExact(obj);
+    if (!is_list && !PyDict_CheckExact(obj)) return Py_NewRef(obj);
+    if (Py_EnterRecursiveCall(" while copying a JSON value")) return NULL;
+    PyObject *out = is_list ? _copy_json_list(obj) : _copy_json_dict(obj);
+    Py_LeaveRecursiveCall();
+    return out;
+}
+
+/**
+ * copy_json(obj) -> object
+ *
+ * The per-iteration factory for dumps of non-ASCII data, in C because a
+ * Python recursive copy costs far more wall-clock than the call it feeds.
+ */
+PyObject *copy_json(PyObject *self, PyObject *obj) {
+    return _copy_json_impl(obj);
+}
+
 static PyMethodDef ssrjson_benchmark_methods[] = {
         {"copy_unicode", (PyCFunction)copy_unicode, METH_VARARGS | METH_KEYWORDS, "Copy a unicode object without UTF-8 cache."},
+        {"copy_json", (PyCFunction)copy_json, METH_O, "Deep-copy a parsed JSON value, every str without UTF-8 cache."},
         {"benchmark_run", (PyCFunction)benchmark_run, METH_VARARGS | METH_KEYWORDS, "Ring-buffer benchmark. Returns (total_ns, [per_iter_ns])."},
         {"inspect_pyunicode", (PyCFunction)inspect_pyunicode, METH_VARARGS | METH_KEYWORDS, "Inspect PyUnicode."},
         {"pyunicode_has_utf8_cache", (PyCFunction)pyunicode_has_utf8_cache, METH_VARARGS | METH_KEYWORDS, "Check if str has UTF-8 cache."},

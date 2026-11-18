@@ -40,6 +40,7 @@ def _add_benchmark_args(parser):
     from .benchmark import (
         DEFAULT_COLD_MULTIPLE,
         DEFAULT_MIN_ITERATIONS,
+        DEFAULT_PROCESS_GIGABYTES,
         DEFAULT_ROUNDS,
         DEFAULT_STATISTIC,
     )
@@ -60,9 +61,10 @@ def _add_benchmark_args(parser):
     )
     parser.add_argument(
         "--process-gigabytes",
-        help="Total gigabytes to process per test case, default 0.1 (float)",
+        help=f"Total gigabytes to process per test case, default "
+        f"{DEFAULT_PROCESS_GIGABYTES} (float)",
         required=False,
-        default=0.1,
+        default=DEFAULT_PROCESS_GIGABYTES,
         type=float,
     )
     parser.add_argument(
@@ -75,7 +77,8 @@ def _add_benchmark_args(parser):
     )
     parser.add_argument(
         "--min-iterations",
-        help="Floor on measured iterations per test case, default 200 (int). "
+        help=f"Floor on measured iterations per test case, default "
+        f"{DEFAULT_MIN_ITERATIONS} (int). "
         "The byte budget alone leaves large files with too few samples.",
         required=False,
         default=DEFAULT_MIN_ITERATIONS,
@@ -183,8 +186,6 @@ def _resolve_benchmark_files(in_dir):
 
 def _run_benchmark_from_args(args):
     """Run benchmark from parsed args. Returns (result, json_path) or None on error."""
-    import os
-
     from .benchmark import Locality, RunOptions, run_benchmark
 
     benchmark_files = _resolve_benchmark_files(args.in_dir)

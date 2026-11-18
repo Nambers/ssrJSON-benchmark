@@ -47,7 +47,9 @@ _INDEX_SEP = "|"
 # emit ~7% more bytes than every compact library and inflates every ratio.
 _COMPACT = (",", ":")
 
-DEFAULT_MIN_ITERATIONS = 200
+# Rationale for both budgets is in the README notes.
+DEFAULT_MIN_ITERATIONS = 100
+DEFAULT_PROCESS_GIGABYTES = 0.05
 DEFAULT_COLD_MULTIPLE = 2.0
 DEFAULT_ROUNDS = 5
 DEFAULT_STATISTIC = "median"
@@ -159,9 +161,36 @@ class RunOptions:
 
 
 class BenchmarkFunction:
-    def __init__(self, func: Callable, library_name: str) -> None:
-        self.func = func
+    """One library's call, as user code writes it: ``func(obj, **kwargs)``,
+    then ``.decode("utf-8")`` / ``.encode("utf-8")`` when *then* names it.
+
+    Kept as data rather than a lambda so the C loop can make the call itself.
+    A lambda adds a Python frame (~10ns) to exactly the libraries that need an
+    argument or a conversion, and that is a sizeable share of a small call.
+    """
+
+    __slots__ = ("library_name", "func", "kwargs", "then")
+
+    def __init__(
+        self,
+        library_name: str,
+        func: Callable,
+        then: str | None = None,
+        **kwargs,
+    ) -> None:
         self.library_name = library_name
+        self.func = func
+        self.kwargs = kwargs
+        self.then = then
+
+    def __call__(self, obj):
+        """The same call, for the untimed paths (verification, sizing)."""
+        out = self.func(obj, **self.kwargs)
+        return getattr(out, self.then)("utf-8") if self.then else out
+
+    def run_kwargs(self) -> dict:
+        """Arguments for ``internal.benchmark_run`` that describe this call."""
+        return {"func": self.func, "kwargs": self.kwargs, "then": self.then}
 
 
 class BenchmarkGroup:
@@ -228,19 +257,6 @@ def _recursive_check_cache(obj, want_cache: bool):
                 return False
         return True
     return True
-
-
-def _recursive_copy_obj(obj):
-    """Recursively copy a JSON-serializable object, using copy_unicode for str/dict keys."""
-    if isinstance(obj, dict):
-        return {
-            internal.copy_unicode(k): _recursive_copy_obj(v) for k, v in obj.items()
-        }
-    if isinstance(obj, list):
-        return [_recursive_copy_obj(item) for item in obj]
-    if isinstance(obj, str):
-        return internal.copy_unicode(obj)
-    return obj
 
 
 def _copy_bytes(data: bytes) -> bytes:
@@ -572,7 +588,7 @@ def _measure_object_bytes(obj) -> int:
 
     tracemalloc.start()
     try:
-        copy = _recursive_copy_obj(obj)
+        copy = internal.copy_json(obj)
         current, _ = tracemalloc.get_traced_memory()
         del copy
         return int(current)
@@ -624,7 +640,7 @@ class _RingSpec:
             return _copy_bytes(self.base)
         if self.input_kind is InputKind.STR:
             return internal.copy_unicode(self.base)
-        return _recursive_copy_obj(self.base)
+        return internal.copy_json(self.base)
 
     def factory(self):
         """The C-level per-iteration factory, or None when no fresh object is
@@ -633,7 +649,7 @@ class _RingSpec:
             return None, None
         if self.input_kind is InputKind.STR:
             return internal.copy_unicode, self.base
-        return _recursive_copy_obj, self.base
+        return internal.copy_json, self.base
 
     def build_ring(self, ring_size: int) -> list:
         # Always distinct copies: a ring of K references to one object has no
@@ -649,7 +665,7 @@ class _RingSpec:
 
 
 def _interleaved_measure(
-    funcs: list[tuple[str, Callable]],
+    funcs: list[BenchmarkFunction],
     spec: _RingSpec,
     ring_size: int,
     repeat: int,
@@ -675,12 +691,12 @@ def _interleaved_measure(
 
     if rounds <= 1:
         times_seq: dict[str, list[int]] = {}
-        for name, func in funcs:
+        for bf in funcs:
             ring = spec.build_ring(ring_size)
             gc_was_enabled = _gc_prepare()
             try:
                 _total, chunk_times = internal.benchmark_run(
-                    func=func,
+                    **bf.run_kwargs(),
                     ring=ring,
                     repeat=repeat,
                     warmup=warmup,
@@ -691,17 +707,17 @@ def _interleaved_measure(
                 if gc_was_enabled:
                     gc.enable()
                 del ring
-            times_seq[name] = chunk_times
+            times_seq[bf.library_name] = chunk_times
         return times_seq
 
-    rings = {name: spec.build_ring(ring_size) for name, _ in funcs}
+    rings = {bf.library_name: spec.build_ring(ring_size) for bf in funcs}
 
     base, extra = divmod(repeat, max(1, rounds))
     chunks = [base + (1 if i < extra else 0) for i in range(max(1, rounds))]
     chunks = [c for c in chunks if c > 0]
 
-    times: dict[str, list[int]] = {name: [] for name, _ in funcs}
-    calls: dict[str, int] = {name: 0 for name, _ in funcs}
+    times: dict[str, list[int]] = {bf.library_name: [] for bf in funcs}
+    calls: dict[str, int] = {bf.library_name: 0 for bf in funcs}
 
     gc_was_enabled = _gc_prepare()
     try:
@@ -709,11 +725,18 @@ def _interleaved_measure(
             shift = round_index % len(funcs)
             order = funcs[shift:] + funcs[:shift]
             # Full warmup once; later rounds only need a short re-settle since
-            # the core has been busy continuously.
-            round_warmup = warmup if round_index == 0 else min(warmup, _WARMUP_MIN)
-            for name, func in order:
+            # the core has been busy continuously: a tenth of the chunk, capped
+            # at _WARMUP_MIN, so it stays small next to the largest files'
+            # ~20-40-call chunks.
+            round_warmup = (
+                warmup
+                if round_index == 0
+                else min(warmup, _WARMUP_MIN, max(2, math.ceil(chunk / 10)))
+            )
+            for bf in order:
+                name = bf.library_name
                 _total, chunk_times = internal.benchmark_run(
-                    func=func,
+                    **bf.run_kwargs(),
                     ring=rings[name],
                     repeat=chunk,
                     warmup=round_warmup,
@@ -761,22 +784,16 @@ def _get_benchmark_defs(localities: list[Locality]) -> tuple[BenchmarkGroup, ...
     for name in available:
         libs[name] = _import_lib(name)
 
-    def _build_functions(
-        func_defs: list[tuple[Callable, str]],
-    ) -> list[BenchmarkFunction]:
-        """Build list of BenchmarkFunctions, skipping unavailable libraries."""
-        result = []
-        for func, lib_name in func_defs:
-            if lib_name == "json" or lib_name in available:
-                result.append(BenchmarkFunction(func, lib_name))
-        return result
-
-    # Helper references
     ujson = libs.get("ujson")
     pydantic_core = libs.get("pydantic_core")
     msgspec = libs.get("msgspec")
     orjson = libs.get("orjson")
     ssrjson = libs.get("ssrjson")
+    fn = BenchmarkFunction
+
+    def present(*funcs) -> list[BenchmarkFunction]:
+        # `lib and fn(...)` yields None for a library that is not installed.
+        return [f for f in funcs if f is not None]
 
     specs: list[tuple] = []
 
@@ -801,60 +818,64 @@ def _get_benchmark_defs(localities: list[Locality]) -> tuple[BenchmarkGroup, ...
             )
         )
 
-    # loads str
-    loads_str_funcs = [(json.loads, "json")]
-    if ujson:
-        loads_str_funcs.append((ujson.loads, "ujson"))
-    if msgspec:
-        loads_str_funcs.append((msgspec.json.decode, "msgspec"))
-    if orjson:
-        loads_str_funcs.append((orjson.loads, "orjson"))
-    if ssrjson:
-        loads_str_funcs.append((ssrjson.loads, "ssrjson"))
-    add(
-        loads_str_funcs,
-        _NAME_LOADS,
-        "loads str",
-        BenchmarkCategory.LOADS,
-        InputKind.STR,
+    # Every call below is what user code writes. Libraries that only produce
+    # the other output type get one trailing decode/encode, timed with the call.
+    loads_funcs = present(
+        fn("json", json.loads),
+        ujson and fn("ujson", ujson.loads),
+        msgspec and fn("msgspec", msgspec.json.decode),
+        orjson and fn("orjson", orjson.loads),
+        ssrjson and fn("ssrjson", ssrjson.loads),
     )
-
-    # loads bytes
-    loads_bytes_funcs = [(json.loads, "json")]
-    if ujson:
-        loads_bytes_funcs.append((ujson.loads, "ujson"))
-    if msgspec:
-        loads_bytes_funcs.append((msgspec.json.decode, "msgspec"))
-    if orjson:
-        loads_bytes_funcs.append((orjson.loads, "orjson"))
-    if ssrjson:
-        loads_bytes_funcs.append((ssrjson.loads, "ssrjson"))
-    add(
-        loads_bytes_funcs,
-        _NAME_LOADS,
-        "loads bytes",
-        BenchmarkCategory.LOADS,
-        InputKind.BYTES,
+    dumps_str_funcs = present(
+        fn("json", json.dumps, ensure_ascii=False, separators=_COMPACT),
+        ujson and fn("ujson", ujson.dumps, ensure_ascii=False),
+        pydantic_core and fn("pydantic_core", pydantic_core.to_json, then="decode"),
+        msgspec and fn("msgspec", msgspec.json.encode, then="decode"),
+        orjson and fn("orjson", orjson.dumps, then="decode"),
+        ssrjson and fn("ssrjson", ssrjson.dumps),
     )
-
-    # dumps to str
-    dumps_str_funcs = [
-        (lambda x: json.dumps(x, ensure_ascii=False, separators=_COMPACT), "json")
+    dumps_str_indent_funcs = present(
+        fn("json", json.dumps, indent=2, ensure_ascii=False),
+        ujson and fn("ujson", ujson.dumps, indent=2, ensure_ascii=False),
+        pydantic_core
+        and fn("pydantic_core", pydantic_core.to_json, then="decode", indent=2),
+        orjson
+        and fn("orjson", orjson.dumps, then="decode", option=orjson.OPT_INDENT_2),
+        ssrjson and fn("ssrjson", ssrjson.dumps, indent=2),
+    )
+    dumps_bytes_funcs = present(
+        fn("json", json.dumps, then="encode", ensure_ascii=False, separators=_COMPACT),
+        ujson and fn("ujson", ujson.dumps, then="encode", ensure_ascii=False),
+        pydantic_core and fn("pydantic_core", pydantic_core.to_json),
+        msgspec and fn("msgspec", msgspec.json.encode),
+        orjson and fn("orjson", orjson.dumps),
+        ssrjson and fn("ssrjson", ssrjson.dumps_to_bytes),
+    )
+    dumps_bytes_indent_funcs = present(
+        fn("json", json.dumps, then="encode", indent=2, ensure_ascii=False),
+        ujson and fn("ujson", ujson.dumps, then="encode", indent=2, ensure_ascii=False),
+        pydantic_core and fn("pydantic_core", pydantic_core.to_json, indent=2),
+        orjson and fn("orjson", orjson.dumps, option=orjson.OPT_INDENT_2),
+        ssrjson and fn("ssrjson", ssrjson.dumps_to_bytes, indent=2),
+    )
+    # Same calls as "dumps to bytes" except ssrJSON's, which is forced out of
+    # its shipping default to isolate what the UTF-8 cache write costs. The
+    # other libraries cannot be switched, so this group is NOT a like-for-like
+    # product comparison and stays out of the aggregate summary; it answers
+    # "how fast is the encoder without the cache tax", not "how fast is the
+    # package you installed".
+    dumps_bytes_nowrite_funcs = [
+        fn("ssrjson", ssrjson.dumps_to_bytes, is_write_cache=False)
+        if f.library_name == "ssrjson"
+        else f
+        for f in dumps_bytes_funcs
     ]
-    if ujson:
-        dumps_str_funcs.append((lambda x: ujson.dumps(x, ensure_ascii=False), "ujson"))
-    if pydantic_core:
-        dumps_str_funcs.append(
-            (lambda x: pydantic_core.to_json(x).decode("utf-8"), "pydantic_core")
-        )
-    if msgspec:
-        dumps_str_funcs.append(
-            (lambda x: msgspec.json.encode(x).decode("utf-8"), "msgspec")
-        )
-    if orjson:
-        dumps_str_funcs.append((lambda x: orjson.dumps(x).decode("utf-8"), "orjson"))
-    if ssrjson:
-        dumps_str_funcs.append((ssrjson.dumps, "ssrjson"))
+
+    add(loads_funcs, _NAME_LOADS, "loads str", BenchmarkCategory.LOADS, InputKind.STR)
+    add(
+        loads_funcs, _NAME_LOADS, "loads bytes", BenchmarkCategory.LOADS, InputKind.BYTES
+    )
     add(
         dumps_str_funcs,
         _NAME_DUMPSTOSTR,
@@ -862,31 +883,6 @@ def _get_benchmark_defs(localities: list[Locality]) -> tuple[BenchmarkGroup, ...
         BenchmarkCategory.DUMPS,
         InputKind.OBJECT,
     )
-
-    # dumps to str (indented2)
-    dumps_str_indent_funcs = [
-        (lambda x: json.dumps(x, indent=2, ensure_ascii=False), "json")
-    ]
-    if ujson:
-        dumps_str_indent_funcs.append(
-            (lambda x: ujson.dumps(x, indent=2, ensure_ascii=False), "ujson")
-        )
-    if pydantic_core:
-        dumps_str_indent_funcs.append(
-            (
-                lambda x: pydantic_core.to_json(x, indent=2).decode("utf-8"),
-                "pydantic_core",
-            )
-        )
-    if orjson:
-        dumps_str_indent_funcs.append(
-            (
-                lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2).decode("utf-8"),
-                "orjson",
-            )
-        )
-    if ssrjson:
-        dumps_str_indent_funcs.append((lambda x: ssrjson.dumps(x, indent=2), "ssrjson"))
     add(
         dumps_str_indent_funcs,
         _NAME_DUMPSTOSTR,
@@ -894,28 +890,6 @@ def _get_benchmark_defs(localities: list[Locality]) -> tuple[BenchmarkGroup, ...
         BenchmarkCategory.DUMPS,
         InputKind.OBJECT,
     )
-
-    # dumps to bytes
-    dumps_bytes_funcs = [
-        (
-            lambda x: json.dumps(x, ensure_ascii=False, separators=_COMPACT).encode(
-                "utf-8"
-            ),
-            "json",
-        )
-    ]
-    if ujson:
-        dumps_bytes_funcs.append(
-            (lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"), "ujson")
-        )
-    if pydantic_core:
-        dumps_bytes_funcs.append((pydantic_core.to_json, "pydantic_core"))
-    if msgspec:
-        dumps_bytes_funcs.append((msgspec.json.encode, "msgspec"))
-    if orjson:
-        dumps_bytes_funcs.append((orjson.dumps, "orjson"))
-    if ssrjson:
-        dumps_bytes_funcs.append((ssrjson.dumps_to_bytes, "ssrjson"))
     add(
         dumps_bytes_funcs,
         _NAME_DUMPSTOBYTES,
@@ -923,36 +897,6 @@ def _get_benchmark_defs(localities: list[Locality]) -> tuple[BenchmarkGroup, ...
         BenchmarkCategory.DUMPS_TO_BYTES,
         InputKind.OBJECT,
     )
-
-    # dumps to bytes (indented2)
-    dumps_bytes_indent_funcs = [
-        (lambda x: json.dumps(x, indent=2, ensure_ascii=False).encode("utf-8"), "json")
-    ]
-    if ujson:
-        dumps_bytes_indent_funcs.append(
-            (
-                lambda x: ujson.dumps(x, indent=2, ensure_ascii=False).encode("utf-8"),
-                "ujson",
-            )
-        )
-    if pydantic_core:
-        dumps_bytes_indent_funcs.append(
-            (
-                lambda x: pydantic_core.to_json(x, indent=2),
-                "pydantic_core",
-            )
-        )
-    if orjson:
-        dumps_bytes_indent_funcs.append(
-            (
-                lambda x: orjson.dumps(x, option=orjson.OPT_INDENT_2),
-                "orjson",
-            )
-        )
-    if ssrjson:
-        dumps_bytes_indent_funcs.append(
-            (lambda x: ssrjson.dumps_to_bytes(x, indent=2), "ssrjson")
-        )
     add(
         dumps_bytes_indent_funcs,
         _NAME_DUMPSTOBYTES,
@@ -960,74 +904,16 @@ def _get_benchmark_defs(localities: list[Locality]) -> tuple[BenchmarkGroup, ...
         BenchmarkCategory.DUMPS_TO_BYTES,
         InputKind.OBJECT,
     )
-
-    # dumps to bytes (cached) - only relevant for non-ASCII
-    dumps_bytes_cached_funcs = [
-        (
-            lambda x: json.dumps(x, ensure_ascii=False, separators=_COMPACT).encode(
-                "utf-8"
-            ),
-            "json",
-        )
-    ]
-    if ujson:
-        dumps_bytes_cached_funcs.append(
-            (
-                lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
-                "ujson",
-            )
-        )
-    if pydantic_core:
-        dumps_bytes_cached_funcs.append((pydantic_core.to_json, "pydantic_core"))
-    if msgspec:
-        dumps_bytes_cached_funcs.append((msgspec.json.encode, "msgspec"))
-    if orjson:
-        dumps_bytes_cached_funcs.append((orjson.dumps, "orjson"))
-    if ssrjson:
-        dumps_bytes_cached_funcs.append((ssrjson.dumps_to_bytes, "ssrjson"))
+    # Only relevant for non-ASCII: the parsed object's strings already carry a
+    # UTF-8 cache, i.e. the steady-state cost of re-dumping the same object.
     add(
-        dumps_bytes_cached_funcs,
+        dumps_bytes_funcs,
         _NAME_DUMPSTOBYTES,
         "dumps to bytes (cached)",
         BenchmarkCategory.DUMPS_TO_BYTES,
         InputKind.OBJECT_CACHED,
         skip_when_ascii=True,
     )
-
-    # dumps to bytes (no cache write) - diagnostic, only relevant for non-ASCII.
-    # ssrJSON is forced out of its shipping default here to isolate what the
-    # UTF-8 cache write costs. The other libraries cannot be switched, so this
-    # group is NOT a like-for-like product comparison and stays out of the
-    # aggregate summary; it answers "how fast is the encoder without the cache
-    # tax", not "how fast is the package you installed".
-    dumps_bytes_nowrite_funcs = [
-        (
-            lambda x: json.dumps(x, ensure_ascii=False, separators=_COMPACT).encode(
-                "utf-8"
-            ),
-            "json",
-        )
-    ]
-    if ujson:
-        dumps_bytes_nowrite_funcs.append(
-            (
-                lambda x: ujson.dumps(x, ensure_ascii=False).encode("utf-8"),
-                "ujson",
-            )
-        )
-    if pydantic_core:
-        dumps_bytes_nowrite_funcs.append((pydantic_core.to_json, "pydantic_core"))
-    if msgspec:
-        dumps_bytes_nowrite_funcs.append((msgspec.json.encode, "msgspec"))
-    if orjson:
-        dumps_bytes_nowrite_funcs.append((orjson.dumps, "orjson"))
-    if ssrjson:
-        dumps_bytes_nowrite_funcs.append(
-            (
-                lambda x: ssrjson.dumps_to_bytes(x, is_write_cache=False),
-                "ssrjson",
-            )
-        )
     add(
         dumps_bytes_nowrite_funcs,
         _NAME_DUMPSTOBYTES,
@@ -1043,7 +929,7 @@ def _get_benchmark_defs(localities: list[Locality]) -> tuple[BenchmarkGroup, ...
         for funcs, base_index, name, category, input_kind, skip_ascii, unfair in specs:
             groups.append(
                 BenchmarkGroup(
-                    _build_functions(funcs),
+                    funcs,
                     base_index,
                     name,
                     category=category,
@@ -1372,7 +1258,7 @@ def _run_benchmark(
     if opts.verify_output:
         for benchmark_target in benchmark_group.functions:
             if not _verify_output(
-                benchmark_target.func, spec, benchmark_group.is_dumps, ctx.parsed
+                benchmark_target, spec, benchmark_group.is_dumps, ctx.parsed
             ):
                 mismatched.add(benchmark_target.library_name)
         if mismatched and not opts.allow_output_mismatch:
@@ -1394,7 +1280,7 @@ def _run_benchmark(
         + f"libs={len(benchmark_group.functions)}"
     )
     times_by_lib = _interleaved_measure(
-        [(bf.library_name, bf.func) for bf in benchmark_group.functions],
+        benchmark_group.functions,
         spec,
         ring_size,
         ctx.repeat,
@@ -1430,7 +1316,7 @@ def _run_benchmark(
             # (the write-cache group does exactly that) cannot touch the shared
             # base object other groups build their rings from.
             size = _get_processed_size(
-                benchmark_target.func, spec.make_copy(), benchmark_group.is_dumps
+                benchmark_target, spec.make_copy(), benchmark_group.is_dumps
             )
             if cur_lib.stat > 0:
                 cur_target.ssrjson_bytes_per_sec = size / (cur_lib.stat / _NS_IN_ONE_S)
