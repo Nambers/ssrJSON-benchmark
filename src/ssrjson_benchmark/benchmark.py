@@ -57,6 +57,10 @@ DEFAULT_STATISTIC = "median"
 _FALLBACK_LLC_BYTES = 8 * 1024 * 1024
 _WARMUP_MIN = 20
 _WARMUP_MAX = 200
+# Inputs whose insignificant whitespace is below this share of their bytes get
+# no compact twin: the bundled fast-path probes are ~0.1% whitespace, so a twin
+# would only re-measure practically the same bytes.
+COMPACT_MIN_WHITESPACE = 0.01
 
 
 def make_index_name(base: str, locality: str) -> str:
@@ -222,6 +226,9 @@ class BenchmarkGroup:
     @property
     def is_dumps(self) -> bool:
         return self.category != BenchmarkCategory.LOADS
+
+    def accepts(self, bench_input: "BenchmarkInput") -> bool:
+        return not (bench_input.loads_only and self.is_dumps)
 
 
 # ---------------------------------------------------------------------------
@@ -1254,6 +1261,71 @@ def fetch_header(result: BenchmarkFinalResult) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Benchmark inputs
+# ---------------------------------------------------------------------------
+
+# A string literal (kept verbatim) or a run of JSON whitespace (dropped).
+_JSON_STRING_OR_WS = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"|[ \t\n\r]+', re.DOTALL)
+
+
+def minify_json_bytes(raw: bytes) -> bytes:
+    """Drop insignificant whitespace and leave every other byte as written.
+
+    Re-serializing would also be compact, but it would rewrite number spellings
+    (canada.json's 43.420273000000009 becomes 43.42027300000001) and escapes
+    (github.json's \\uXXXX become raw UTF-8, flipping its source to non-ASCII),
+    so the result would no longer be the same document minus whitespace.
+    """
+    return _JSON_STRING_OR_WS.sub(
+        lambda m: m.group() if m.group()[:1] == b'"' else b"", raw
+    )
+
+
+class BenchmarkInput:
+    """One document to measure. ``compact_of`` names the source of a derived
+    compact twin. A twin is loads-only: it parses to the same object as its
+    source, so dumps would only repeat the source's numbers under another
+    name. In the loads summary the twin stands in for a source that
+    ``has_twin``."""
+
+    __slots__ = ("name", "raw_bytes", "compact_of", "has_twin")
+
+    def __init__(self, name: str, raw_bytes: bytes, compact_of: str = ""):
+        self.name = name
+        self.raw_bytes = raw_bytes
+        self.compact_of = compact_of
+        self.has_twin = False
+
+    @property
+    def loads_only(self) -> bool:
+        return bool(self.compact_of)
+
+
+def load_inputs(files: list[pathlib.Path], compact: bool = True) -> list[BenchmarkInput]:
+    """Read every file and, when *compact*, follow each pretty-printed one with
+    a whitespace-stripped twin named ``<stem>.min.json``, because most JSON on
+    the wire is compact while the bundled files are not."""
+    names = {f.name for f in files}
+    inputs: list[BenchmarkInput] = []
+    for file in files:
+        raw = file.read_bytes()
+        if not raw:
+            raise RuntimeError(f"File {file} is empty.")
+        source = BenchmarkInput(file.name, raw)
+        inputs.append(source)
+        twin = f"{file.stem}.min{file.suffix}"
+        # Skip when the dataset already ships its own compact copy by that name.
+        if not compact or twin in names:
+            continue
+        packed = minify_json_bytes(raw)
+        if len(raw) - len(packed) < COMPACT_MIN_WHITESPACE * len(raw):
+            continue
+        source.has_twin = True
+        inputs.append(BenchmarkInput(twin, packed, compact_of=file.name))
+    return inputs
+
+
+# ---------------------------------------------------------------------------
 # Core benchmark execution
 # ---------------------------------------------------------------------------
 
@@ -1269,9 +1341,9 @@ class _FileContext:
         "cold_multiple",
         "object_is_ascii",
         "input_is_ascii",
-        "object_copy_bytes",
         "parsed",
         "_text",
+        "_object_copy_bytes",
     )
 
     def __init__(
@@ -1284,7 +1356,6 @@ class _FileContext:
         cold_multiple: float,
         object_is_ascii: bool,
         input_is_ascii: bool,
-        object_copy_bytes: int,
     ):
         self.raw_bytes = raw_bytes
         self.repeat = repeat
@@ -1293,18 +1364,25 @@ class _FileContext:
         self.cold_multiple = cold_multiple
         self.object_is_ascii = object_is_ascii
         self.input_is_ascii = input_is_ascii
-        self.object_copy_bytes = object_copy_bytes
         # Parsed object and decoded text are only ever read from -- every ring
         # entry is a fresh copy -- so they are shared across all groups instead
         # of being rebuilt per group.
         self.parsed = parsed
         self._text = None
+        self._object_copy_bytes = None
 
     @property
     def text(self) -> str:
         if self._text is None:
             self._text = self.raw_bytes.decode("utf-8")
         return self._text
+
+    @property
+    def object_copy_bytes(self) -> int:
+        # Loads-only inputs and index groups never need it.
+        if self._object_copy_bytes is None:
+            self._object_copy_bytes = _measure_object_bytes(self.parsed)
+        return self._object_copy_bytes
 
     def make_spec(self, group: BenchmarkGroup) -> _RingSpec:
         """Decide the base object, whether fresh copies are required, and how
@@ -1437,7 +1515,7 @@ def _run_benchmark(
 
 def _run_file_benchmark(
     benchmark_groups: list[BenchmarkGroup],
-    file: pathlib.Path,
+    bench_input: BenchmarkInput,
     process_bytes: int,
     min_iterations: int,
     llc_bytes: int,
@@ -1445,14 +1523,10 @@ def _run_file_benchmark(
     index_s: str,
     opts: RunOptions,
 ):
-    print(f"Running benchmark for {file.name}, index group: {index_s}")
-    with open(file, "rb") as f:
-        raw_bytes = f.read()
-    base_file_name = os.path.basename(file)
+    print(f"Running benchmark for {bench_input.name}, index group: {index_s}")
+    raw_bytes = bench_input.raw_bytes
     cur_result_file = BenchmarkResultPerFile()
     cur_result_file.byte_size = bytes_size = len(raw_bytes)
-    if bytes_size == 0:
-        raise RuntimeError(f"File {file} is empty.")
     parsed = json.loads(raw_bytes)
     kind, str_size, object_is_ascii = _inspect_pyunicode_in_json(parsed)
     assert isinstance(kind, int)
@@ -1477,15 +1551,15 @@ def _run_file_benchmark(
         cold_multiple=cold_multiple,
         object_is_ascii=object_is_ascii,
         input_is_ascii=input_is_ascii,
-        object_copy_bytes=_measure_object_bytes(parsed),
     )
 
     for benchmark_group in benchmark_groups:
-        if benchmark_group.index_name == index_s and (
-            not benchmark_group.skip_when_ascii or not object_is_ascii
-        ):
+        if not benchmark_group.skip_when_ascii or not object_is_ascii:
             _run_benchmark(cur_result_file, ctx, benchmark_group, opts)
-    return base_file_name, cur_result_file
+            if bench_input.has_twin and not benchmark_group.is_dumps:
+                # Its compact twin stands in for it in the loads summary.
+                cur_result_file[benchmark_group.group_name].in_summary = False
+    return cur_result_file
 
 
 def is_unix_except_macos():
@@ -1520,6 +1594,7 @@ def run_benchmark(
     pin_core: int | None = None,
     pin: bool = True,
     output_path: str | None = None,
+    compact: bool = True,
 ) -> tuple[BenchmarkFinalResult, str]:
     """Run benchmarks and generate a JSON result file. Returns (result, filename)."""
     if localities is None:
@@ -1570,8 +1645,12 @@ def run_benchmark(
         result.results = {}
 
         benchmark_groups = _filter_groups(_get_benchmark_libraries(localities), only)
+        # Twins are loads-only, so make them only when a loads group runs.
+        inputs = load_inputs(
+            files, compact and any(not g.is_dumps for g in benchmark_groups)
+        )
 
-        result.filenames = [f.name for f in files]
+        result.filenames = [i.name for i in inputs]
         result.processbytesgb = process_bytes / 1024 / 1024 / 1024
         result.locality_modes = [loc.value for loc in localities]
         result.min_iterations = min_iterations
@@ -1592,10 +1671,17 @@ def run_benchmark(
 
         for index_s in result.categories:
             result.results[index_s] = {}
-            for bench_file in files:
-                k, v = _run_file_benchmark(
-                    benchmark_groups,
-                    bench_file,
+            for bench_input in inputs:
+                groups = [
+                    g
+                    for g in benchmark_groups
+                    if g.index_name == index_s and g.accepts(bench_input)
+                ]
+                if not groups:
+                    continue
+                result.results[index_s][bench_input.name] = _run_file_benchmark(
+                    groups,
+                    bench_input,
                     process_bytes,
                     min_iterations,
                     llc_bytes,
@@ -1603,7 +1689,6 @@ def run_benchmark(
                     index_s,
                     opts,
                 )
-                result.results[index_s][k] = v
         output_result = result.dumps()
 
         if os.path.exists(file):

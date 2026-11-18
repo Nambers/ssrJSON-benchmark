@@ -314,6 +314,38 @@ def check_baseline_is_compact():
     print("ok  stdlib baseline emits compact separators")
 
 
+def check_compact_twins():
+    """A compact twin must be its source minus whitespace: same parsed value,
+    same bytes inside every string literal, and loads-only."""
+    import pathlib
+
+    from .benchmark import load_inputs, minify_json_bytes
+
+    tricky = b'{ "a b" : [ 1 , "x\\" \\\\ ", "\\n" ,\n\t"\xe4\xb8\xad \\u4e2d" ] }'
+    assert minify_json_bytes(tricky) == b'{"a b":[1,"x\\" \\\\ ","\\n","\xe4\xb8\xad \\u4e2d"]}'
+
+    files_dir = pathlib.Path(__file__).resolve().parent / "_files"
+    files = sorted(files_dir.glob("*.json"))
+    if not files:
+        print("skip compact twins: bundled _files not present")
+        return
+    inputs = load_inputs(files)
+    by_name = {i.name: i for i in inputs}
+    for i in inputs:
+        if not i.loads_only:
+            continue
+        src = by_name[i.compact_of]
+        assert json.loads(i.raw_bytes) == json.loads(src.raw_bytes), i.name
+        assert len(i.raw_bytes) < len(src.raw_bytes), i.name
+    names = [i.name for i in inputs]
+    # Fast-path probes are ~0.1% whitespace and must not get a twin.
+    assert "simple_object.min.json" not in names
+    assert not by_name["simple_object.json"].has_twin
+    assert "twitter.min.json" in names and by_name["twitter.json"].has_twin
+    assert names.index("twitter.min.json") == names.index("twitter.json") + 1
+    print("ok  compact twins only drop whitespace")
+
+
 def check_call_path():
     """The C loop must make exactly the call user code makes -- keyword
     arguments included, then the decode/encode -- and no library may be
@@ -418,6 +450,7 @@ def check_build_info():
 def main() -> int:
     check_copy_json()
     check_build_info()
+    check_compact_twins()
     check_call_path()
     check_summary_counts_documents_once()
     check_ring_rotation()

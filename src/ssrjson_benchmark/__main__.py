@@ -150,6 +150,12 @@ def _add_benchmark_args(parser):
         action="store_true",
     )
     parser.add_argument(
+        "--no-compact",
+        help="Do not add a whitespace-stripped <name>.min.json twin of each "
+        "pretty-printed input to the loads tests.",
+        action="store_true",
+    )
+    parser.add_argument(
         "--no-verify-output",
         help="Skip the round-trip check that each library produces the expected value.",
         action="store_true",
@@ -242,6 +248,7 @@ def _run_benchmark_from_args(args):
         ),
         pin_core=args.pin_core,
         pin=not args.no_pin,
+        compact=not args.no_compact,
     )
     return result, default_file
 
@@ -277,6 +284,8 @@ def _child_argv(args, out_path: str) -> list[str]:
         argv += ["--pin-core", str(args.pin_core)]
     if args.no_pin:
         argv.append("--no-pin")
+    if args.no_compact:
+        argv.append("--no-compact")
     if args.no_verify_output:
         argv.append("--no-verify-output")
     if args.allow_output_mismatch:
